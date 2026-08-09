@@ -248,8 +248,10 @@ def generate_global_grid_to_netcdf(
     if base_bisection is None:
         raise ValueError(
             "export-first generation cannot bound the initial root stage; "
-            "use a smaller-root decomposition when available or the in-memory "
-            "generate_grid workflow with sufficient memory"
+            "use a smaller-root decomposition only if a different grid identity, "
+            "refinement hierarchy, and potentially optimized geometry are "
+            "acceptable, or use the in-memory generate_grid workflow with "
+            "sufficient memory"
         )
     if not _accelerated.should_use_numba(options.accelerator, spec.expected_cells):
         raise ModuleNotFoundError(

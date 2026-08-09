@@ -73,8 +73,11 @@ The in-memory base stage is selected by cell count, not by the spelling of the
 `R<n>B<k>` decomposition. By default the largest stage with at most 1,310,720
 cells is built as an `IconGrid`, then later stages use compact refinement. If the
 unrefined `B0` root already exceeds that budget, export-first generation rejects
-the request. Use a smaller-root decomposition when the same frequency permits
-it, or use the in-memory workflow with sufficient memory.
+the request. A smaller-root decomposition with the same frequency is a different
+grid: it changes the canonical spec and UUID, changes the refinement hierarchy,
+and can change staged optimization geometry. Use that alternative only when
+those differences are acceptable; otherwise use the exact spec through the
+in-memory workflow with sufficient memory.
 
 ### NetCDF field profiles
 

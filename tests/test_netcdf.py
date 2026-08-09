@@ -252,7 +252,7 @@ def test_streamed_base_stage_is_selected_by_cell_count(
 
 
 def test_streamed_generation_rejects_unbounded_root_stage(tmp_path):
-    with pytest.raises(ValueError, match="cannot bound the initial root stage"):
+    with pytest.raises(ValueError, match="different grid identity"):
         generate_grid_to_netcdf(
             GlobalGridSpec(root=257, bisections=0),
             tmp_path / "grid.nc",

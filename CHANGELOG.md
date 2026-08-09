@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-- Make accelerated spring reductions deterministic across Numba thread counts,
-  preserving byte-identical geometry for one grid identity.
+- Make accelerated spring reductions deterministic across Numba thread counts
+  through production-default convergence, preserving byte-identical geometry
+  for one grid identity.
 - Select export-first base stages by cell count so root-heavy global specs do not
-  unexpectedly fall back to complete in-memory export.
+  unexpectedly fall back to complete in-memory export, and clarify that changing
+  the root/bisection decomposition changes grid identity and hierarchy.
 - Clarify custom streamed metadata, transient disk headroom, checkpoint cleanup,
   safe large-grid examples, and component-level R2B12 performance behavior.
 - Keep performance scratch data on workspace or explicitly configured disk-backed

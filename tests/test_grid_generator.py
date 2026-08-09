@@ -898,13 +898,13 @@ def test_numba_global_generation_is_thread_count_deterministic():
     try:
         numba.set_num_threads(1)
         serial = generate_grid(
-            "R02B03",
-            options={"accelerator": "numba", "spring_iterations": 20},
+            "R02B02",
+            options={"accelerator": "numba"},
         )
         numba.set_num_threads(min(4, available_threads))
         parallel = generate_grid(
-            "R02B03",
-            options={"accelerator": "numba", "spring_iterations": 20},
+            "R02B02",
+            options={"accelerator": "numba"},
         )
     finally:
         numba.set_num_threads(available_threads)
