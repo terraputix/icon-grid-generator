@@ -645,6 +645,8 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypa
 
     assert np.array_equal(numba_grid.cells, numpy_grid.cells)
     assert np.array_equal(numba_grid.edges, numpy_grid.edges)
+    assert np.array_equal(numba_grid.cell_edges, numpy_grid.cell_edges)
+    assert np.array_equal(numba_grid.edge_cells, numpy_grid.edge_cells)
     assert np.array_equal(numba_grid.vertices, repeated_numba_grid.vertices)
     assert np.array_equal(numba_grid.cell_center_xyz, repeated_numba_grid.cell_center_xyz)
     assert np.array_equal(numba_grid.edge_center_xyz, repeated_numba_grid.edge_center_xyz)
@@ -730,6 +732,59 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypa
     assert emitted_count == expected_edges[0].shape[0]
     assert np.array_equal(reindexed_edges, expected_edges[0])
     assert np.array_equal(reindexed_cell_edges, expected_edges[1])
+
+    rebuilt_vertices, rebuilt_cells, rebuilt_provenance = (
+        gg._refine_triangles_bisection_with_provenance(
+            numba_grid.vertices,
+            numba_grid.cells,
+            "numba",
+        )
+    )
+    reused_vertices, reused_cells, reused_provenance = (
+        gg._refine_triangles_bisection_with_provenance(
+            numba_grid.vertices,
+            numba_grid.cells,
+            "numba",
+            edge_vertices=numba_grid.edges,
+            cell_edges=numba_grid.cell_edges,
+            edge_cells=numba_grid.edge_cells,
+        )
+    )
+    assert np.array_equal(reused_vertices, rebuilt_vertices)
+    assert np.array_equal(reused_cells, rebuilt_cells)
+    for name in BisectionProvenance.__dataclass_fields__:
+        reused = getattr(reused_provenance, name)
+        rebuilt = getattr(rebuilt_provenance, name)
+        if reused is None or rebuilt is None:
+            assert reused is rebuilt
+        else:
+            assert np.array_equal(reused, rebuilt)
+
+
+def test_fused_global_orientation_rejects_degenerate_edges(monkeypatch):
+    spec = parse_grid_spec("R01B01")
+    options = IconGridOptions(optimize_global=False, accelerator="numpy")
+    context = gg._GlobalGenerationContext()
+    geometry = SphericalIcosahedralGeometry().build(spec, options)
+    geometry = IconOrderingBuilder(context).order_spherical_bisection(
+        spec,
+        options,
+        geometry,
+    )
+    topology = GlobalTopologyBuilder().build(spec, options, geometry)
+
+    monkeypatch.setattr(_accelerated, "should_use_numba_large", lambda *_: True)
+    monkeypatch.setattr(
+        _accelerated,
+        "global_edge_orientation_states_numba",
+        lambda *args: (np.ones(topology.edges.shape[0], dtype=np.int8), 1, 0),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="edge system orientation is degenerate for at least one edge",
+    ):
+        gg._adjust_global_edge_orientation(spec, options, geometry, topology, context)
 
 
 

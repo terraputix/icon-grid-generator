@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import builtins
+import sys
+import types
+import weakref
 
 import numpy as np
 import pytest
@@ -293,3 +296,57 @@ def test_to_netcdf_reports_missing_netcdf4(monkeypatch, tmp_path):
 
     with pytest.raises(ModuleNotFoundError, match="NetCDF export requires"):
         grid.to_netcdf(tmp_path / "grid.nc")
+
+
+def test_netcdf_writer_releases_field_before_requesting_next(monkeypatch, tmp_path):
+    grid = generate_grid("R01B00")
+
+    class TrackingFields:
+        def __init__(self):
+            self.index = 0
+            self.previous = None
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.previous is not None:
+                assert self.previous() is None
+            if self.index == 2:
+                raise StopIteration
+            data = np.full(grid.dims["cell"], self.index, dtype=np.float64)
+            self.previous = weakref.ref(data)
+            self.index += 1
+            return f"field_{self.index}", ("cell",), data, {}
+
+    class Variable:
+        def __setitem__(self, key, value):
+            assert key == slice(None)
+            assert value.shape == (grid.dims["cell"],)
+
+        def setncattr(self, name, value):
+            pass
+
+    class Dataset:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def createDimension(self, name, size):
+            pass
+
+        def setncattr(self, name, value):
+            pass
+
+        def createVariable(self, name, dtype, dims):
+            return Variable()
+
+    monkeypatch.setitem(sys.modules, "netCDF4", types.SimpleNamespace(Dataset=Dataset))
+    monkeypatch.setattr(_netcdf, "_icon_fields", lambda unused_grid: TrackingFields())
+
+    _netcdf.write_icon_grid(grid, tmp_path / "lifetime.nc")
