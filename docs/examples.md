@@ -1,12 +1,8 @@
 # Examples
 
-The examples below are complete snippets. They use small grids so they are fast
-to copy, paste, and run. Each grid-producing example writes an SVG edge plot
-with `grid_generator.visualization.write_svg`, and the checked-in figures below
-are generated from the same code path.
-
-Contributors can regenerate the figures with `make docs-figures`; `make check`
-verifies that the checked-in versions are current.
+These complete examples use small grids and write SVG edge plots with
+`grid_generator.visualization.write_svg`. The displayed figures correspond to
+the snippets.
 
 ## Output Directory
 

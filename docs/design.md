@@ -20,31 +20,25 @@ returns the output `Path` rather than a complete `IconGrid`.
 
 - Public grid specs, `generate_grid()`, and global-only
   `generate_grid_to_netcdf()` are the main generation API.
-- `IconGrid.dims` and array shapes must remain predictable from the spec.
+- `IconGrid.dims` and array shapes derive deterministically from the spec.
 - Internal topology arrays are zero-based; exported NetCDF index fields are
   one-based where ICON expects that convention.
-- Metadata keys used by UUIDs, NetCDF export, and examples should not drift
-  accidentally.
-- Grid UUIDs must stay stable for unchanged canonical inputs.
+- Metadata and grid UUIDs are stable for unchanged canonical inputs.
 
 ## Feature Boundaries
 
-- The package is Python API first. Keep command wrappers and workflow glue out
-  unless they support an existing public API use case.
+- The package exposes a Python API and does not provide workflow-specific command
+  wrappers.
 - Global, planar, limited-area, optimization, diffusion, diagnostics, and
   normal NetCDF export share the `IconGrid` data model. Export-first global
-  generation deliberately uses a compact private representation.
-- `grid_generator.py` is the public facade. Keep large implementation concerns
-  in focused private modules such as `_global.py`, `_netcdf.py`, `_planar.py`,
-  and `_limited_area.py`; preserve thin private aliases only where internal
-  builders/tests still rely on them.
-- Triangular grids are the supported cell family. Add other cell families only
-  with explicit public API, NetCDF, and diagnostic contracts.
-- Ragged planar grids are deterministic Python variants; test structural
-  validity and exported contracts rather than assuming metric identity with
-  regular planar grids.
-- Parent/provenance indices belong in `IconGrid.refinement`; metadata should
-  carry descriptive scalar attributes only.
+  generation uses a compact private representation.
+- `grid_generator.py` is the public facade; focused private modules contain the
+  spherical, planar, regional, NetCDF, and streaming implementations.
+- Triangles are the only supported cell family.
+- Ragged planar grids are deterministic variants with their own geometry rather
+  than metric-equivalent versions of regular planar grids.
+- Parent/provenance indices live in `IconGrid.refinement`; metadata contains
+  descriptive scalar attributes.
 
 ## Architectural Decisions
 
@@ -104,12 +98,6 @@ returns the output `Path` rather than a complete `IconGrid`.
 - Pipeline stage results use frozen dataclasses to keep builder boundaries
   explicit. Arrays remain mutable NumPy buffers during construction; callers
   should treat completed `IconGrid` objects as immutable values.
-- `grid_generator.py` owns public specs, validation-facing helpers, metadata,
-  UUID payloads, and the `generate_grid()` facade. Large implementation
-  concerns should stay in focused private modules rather than growing the
-  facade again.
-- Performance checks live behind `make perf-check` and are intentionally
-  separate from default CI-style checks because runtime varies with local load.
 
 ## Optimization Algorithms
 
@@ -220,7 +208,7 @@ The optimized measurements below used default staged spring relaxation on an
 exclusive dual-socket AMD EPYC 7713 node with 128 physical cores (256 hardware
 threads) and about 446 GiB of scheduler-visible memory. The software stack was
 Python 3.11, NumPy 2.4.6, Numba 0.66, netCDF4 1.7.4, and 128 Numba threads.
-Each row is one fresh process with a new profile-specific checkpoint directory.
+Each row is an independent process with a profile-specific checkpoint directory.
 
 `Generation` includes all checkpoint writes. `NetCDF export` includes
 profile-specific field computation, HDF5 serialization, and file close.
@@ -241,44 +229,42 @@ Checkpoint and NetCDF columns are logical sizes at completion.
 
 | Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.90 GiB |
+| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.89 GiB |
 | `R02B09` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min | 6.65 GiB | 3.20 GiB | 7.58 GiB |
 | `R02B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min | 24.44 GiB | 12.92 GiB | 30.31 GiB |
-| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.79 GiB | 51.83 GiB | 121.25 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.78 GiB | 51.83 GiB | 121.25 GiB |
 | `R02B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
 
 The field profile does not change core topology generation, so differences in
-that column are independent-run variability. Reduced output does avoid
-computing omitted coordinate bounds, connectivity, metrics, Cartesian,
-placeholder, and hierarchy fields. At R2B12 this cut NetCDF export time by 54%,
-total time by 38%, and final storage by 54%. Both R2B12 profiles completed in
-three-hour allocations; reduced completed within the original two-hour target.
+that column are run-to-run variability. Reduced output omits unselected
+coordinate bounds, connectivity, metrics, Cartesian, placeholder, and hierarchy
+computations. At R2B12, reduced output uses 54% less export time, 38% less total
+time, and 54% less final storage than full output.
 
 ### Storage by field profile
 
-These representative cases compare actual uncompressed files. Full and reduced
-come from the fresh runs above; ICON and icon4py reuse an already validated
-checkpoint because only their file payload is being compared.
+These representative cases compare measured uncompressed files. Full and
+reduced include complete generation; ICON and icon4py reuse the same generated
+topology because field selection affects export only.
 
 | Grid | Full | Reduced | ICON | icon4py |
 | --- | ---: | ---: | ---: | ---: |
-| `R02B08` | 4.09 GiB | 1.90 GiB | 1.60 GiB | 1.32 GiB |
+| `R02B08` | 4.09 GiB | 1.89 GiB | 1.60 GiB | 1.32 GiB |
 | `R02B10` | 65.47 GiB | 30.31 GiB | 25.63 GiB | 21.09 GiB |
 
-All output directories used the same 8-way, 16 MiB filesystem striping. Every
-headline file was reopened to check exact dimensions, profile-specific variable
-count, UUID, finite positive metrics, and spherical area consistency, then
-deleted with its fresh checkpoints. R2B12 checkpoints grow by less than four
-times from R2B11 because the final addressable grid does not retain parent
-normals for an impossible R2B13 stage.
+All measurements used the same 8-way, 16 MiB filesystem striping. Each full and
+reduced file was reopened to verify dimensions, variable count, UUID, finite
+positive metrics, and spherical area consistency. R2B12 checkpoints grow by
+less than four times from R2B11 because the final addressable grid does not
+retain parent normals for an impossible R2B13 stage.
 
 Logical output size is stable for a schema, but shared-filesystem write time is
 highly dependent on load, striping, page cache, and writeback. These I/O timings
-should therefore be taken with a grain of salt; they are campaign observations,
-not service-level throughput guarantees.
+are representative measurements, not throughput guarantees.
 
-The performance improvement comes from coordinated changes at each lifecycle
-boundary:
+### Scalability mechanisms
+
+Large-grid generation uses:
 
 1. deterministic vertex-owned parallel spring reductions instead of serial
    scatter-heavy NumPy force accumulation;
@@ -290,43 +276,21 @@ boundary:
    orientation work arrays during refinement;
 5. compact staged parents containing only refinement topology, vertex
    incidence, and the primal normals required by the next stage;
-6. atomic disk-backed checkpoints for completed bisection stages;
+6. immutable disk-backed checkpoint snapshots selected by an atomic manifest
+   update, preserving the preceding stage if an overwrite is interrupted;
 7. export-first NetCDF construction that writes connectivity and derived fields
    sequentially and releases each table before constructing the next; and
 8. scale-relative orientation checks that remain valid when geometric
    determinants shrink at sub-kilometre resolution.
 
-Numba remains optional so the base package still depends only on NumPy.
+Numba is optional, so the base package depends only on NumPy.
 `accelerator="auto"` uses Numba for sufficiently large kernels when the
 `accelerate` extra is installed. Without it, generation falls back to the
-correct deterministic NumPy reference path. That fallback is intentionally
-supported but is not performance-equivalent: the original NumPy R2B9 run took
-36.11 minutes rather than 1.42 minutes, and larger optimized grids are not
-practical on it. Install `icon-grid-generator[accelerate]` for high-resolution
-global generation; explicit `accelerator="numba"` fails early if Numba is not
-available.
+correct deterministic NumPy path, which is suitable for modest grids but not
+high-resolution global generation. Explicit `accelerator="numba"` fails if
+Numba is unavailable.
 
-The export-first path is intentionally global-only and requires Numba above its
-in-memory base stage. It does not silently select the correct but impractical
-NumPy fallback. `generate_grid` retains that fallback for normal in-memory work.
-When no checkpoint directory is supplied, checkpoints live beside the output;
-large jobs should place both on disk-backed scratch rather than a memory-backed
-temporary filesystem.
-
-## Testing Expectations
-
-Changes to geometry, topology, metrics, refinement, limited-area extraction, or
-NetCDF output should include tests for the relevant contract:
-
-- expected cell, edge, and vertex counts
-- index bounds and missing-neighbor sentinels
-- finite numeric geometry and positive areas/lengths where applicable
-- parent/provenance index validity
-- exported NetCDF dimensions, variables, and metadata
-
-Use the smallest grid that proves the behavior. Larger grids are useful only for
-representative sanity checks.
-
-Private helper tests may exercise defensive branches for coverage when the
-branch protects a public contract. These tests are regression guards, not
-scientific validation or additional public API.
+The export-first path is global-only and requires Numba above its in-memory base
+stage. `generate_grid()` retains the NumPy path for in-memory work. By default,
+checkpoints live beside the output; large jobs require disk-backed output and
+checkpoint locations rather than a memory-backed temporary filesystem.

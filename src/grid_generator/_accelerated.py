@@ -260,6 +260,15 @@ def fixed_incidence_numba(
     return _compiled_fixed_incidence()(owners, values, row_count, width)
 
 
+def edge_incidence_numba(
+    edges: np.ndarray,
+    vertex_count: int,
+    width: int,
+) -> tuple[np.ndarray, int, int]:
+    """Build one-based vertex-edge incidence without endpoint concatenation."""
+    return _compiled_edge_incidence()(edges, vertex_count, width)
+
+
 def spherical_edge_metrics_numba(
     vertices: np.ndarray,
     cell_center_xyz: np.ndarray,
@@ -1194,6 +1203,28 @@ def _compiled_fixed_incidence():
                 return incidence, owner, position + 1
             incidence[owner, position] = values[item]
             counts[owner] = position + 1
+        return incidence, -1, 0
+
+    return fill
+
+
+@lru_cache(maxsize=1)
+def _compiled_edge_incidence():
+    from numba import njit
+
+    @njit
+    def fill(edges, vertex_count, width):
+        incidence = np.zeros((vertex_count, width), dtype=np.int32)
+        counts = np.zeros(vertex_count, dtype=np.int32)
+        for edge in range(edges.shape[0]):
+            one_based_edge = edge + 1
+            for endpoint in range(2):
+                vertex = edges[edge, endpoint]
+                position = counts[vertex]
+                if position >= width:
+                    return incidence, vertex, position + 1
+                incidence[vertex, position] = one_based_edge
+                counts[vertex] = position + 1
         return incidence, -1, 0
 
     return fill

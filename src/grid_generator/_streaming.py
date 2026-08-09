@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+import uuid
 
 import numpy as np
 
@@ -93,46 +94,65 @@ class _CheckpointStore:
         manifest_path = stage / "manifest.json"
         if not manifest_path.is_file():
             return None
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(manifest, dict):
+            return None
+        checkpoint_format = manifest.get("format")
         if (
-            manifest.get("format") != 1
+            checkpoint_format not in (1, 2)
             or manifest.get("configuration_uuid") != self.configuration_uuid
             or manifest.get("stage") != spec.name
         ):
             return None
+        snapshot = None
+        if checkpoint_format == 2:
+            snapshot = manifest.get("snapshot")
+            if (
+                not isinstance(snapshot, str)
+                or len(snapshot) != 32
+                or any(character not in "0123456789abcdef" for character in snapshot)
+            ):
+                return None
 
         def array(name: str) -> np.ndarray:
-            return np.load(stage / f"{name}.npy", mmap_mode="r", allow_pickle=False)
+            filename = f"{snapshot}.{name}.npy" if snapshot is not None else f"{name}.npy"
+            return np.load(stage / filename, mmap_mode="r", allow_pickle=False)
 
-        provenance = None
-        if manifest.get("has_provenance"):
-            provenance = BisectionProvenance(
-                cells=np.empty((0, 3), dtype=np.int32),
-                edges=np.empty((0, 2), dtype=np.int32),
-                cell_edges=np.empty((0, 3), dtype=np.int32),
-                parent_vertex_index=array("parent_vertex_index"),
-                parent_cell_index=array("parent_cell_index"),
-                parent_cell_type=array("parent_cell_type"),
-                child_parent_edge_index=array("child_parent_edge_index"),
-                child_edge_parent_type=array("child_edge_parent_type"),
+        try:
+            provenance = None
+            if manifest.get("has_provenance"):
+                provenance = BisectionProvenance(
+                    cells=np.empty((0, 3), dtype=np.int32),
+                    edges=np.empty((0, 2), dtype=np.int32),
+                    cell_edges=np.empty((0, 3), dtype=np.int32),
+                    parent_vertex_index=array("parent_vertex_index"),
+                    parent_cell_index=array("parent_cell_index"),
+                    parent_cell_type=array("parent_cell_type"),
+                    child_parent_edge_index=array("child_parent_edge_index"),
+                    child_edge_parent_type=array("child_edge_parent_type"),
+                )
+            normal = (
+                array("edge_primal_normal_cartesian")
+                if manifest.get("has_parent_normals")
+                else None
             )
-        normal = (
-            array("edge_primal_normal_cartesian")
-            if manifest.get("has_parent_normals")
-            else None
-        )
-        compact = _CompactGlobalGrid(
-            spec=spec,
-            options=options,
-            vertices=array("vertices"),
-            cells=array("cells"),
-            edges=array("edges"),
-            cell_edges=array("cell_edges"),
-            edge_cells=array("edge_cells"),
-            edges_of_vertex=array("edges_of_vertex"),
-            edge_primal_normal_cartesian=normal,
-            provenance=provenance,
-        )
+            compact = _CompactGlobalGrid(
+                spec=spec,
+                options=options,
+                vertices=array("vertices"),
+                cells=array("cells"),
+                edges=array("edges"),
+                cell_edges=array("cell_edges"),
+                edge_cells=array("edge_cells"),
+                edges_of_vertex=array("edges_of_vertex"),
+                edge_primal_normal_cartesian=normal,
+                provenance=provenance,
+            )
+        except (OSError, ValueError):
+            return None
         if compact.dims != {
             "cell": spec.expected_cells,
             "edge": spec.expected_edges,
@@ -144,6 +164,7 @@ class _CheckpointStore:
     def save(self, grid: _CompactGlobalGrid) -> None:
         stage = self.root / grid.name
         stage.mkdir(parents=True, exist_ok=True)
+        snapshot = uuid.uuid4().hex
         arrays = {
             "vertices": grid.vertices,
             "cells": grid.cells,
@@ -167,20 +188,35 @@ class _CheckpointStore:
                     raise RuntimeError("cannot checkpoint incomplete final provenance")
                 arrays[name] = value
         for name, value in arrays.items():
-            temporary = stage / f".{name}.npy.partial"
+            temporary = stage / f".{snapshot}.{name}.npy.partial"
             with temporary.open("wb") as handle:
                 np.save(handle, value, allow_pickle=False)
-            os.replace(temporary, stage / f"{name}.npy")
+            os.replace(temporary, stage / f"{snapshot}.{name}.npy")
         manifest = {
-            "format": 1,
+            "format": 2,
             "configuration_uuid": self.configuration_uuid,
             "stage": grid.name,
+            "snapshot": snapshot,
             "has_parent_normals": grid.edge_primal_normal_cartesian is not None,
             "has_provenance": grid.provenance is not None,
         }
-        temporary_manifest = stage / ".manifest.json.partial"
+        temporary_manifest = stage / f".manifest.{snapshot}.json.partial"
         temporary_manifest.write_text(json.dumps(manifest, sort_keys=True) + "\n")
         os.replace(temporary_manifest, stage / "manifest.json")
+        self._remove_unreferenced_snapshot_files(stage, snapshot)
+
+    @staticmethod
+    def _remove_unreferenced_snapshot_files(stage: Path, snapshot: str) -> None:
+        retained_prefix = f"{snapshot}."
+        for path in (*stage.glob("*.npy"), *stage.glob(".*.partial")):
+            if path.name.startswith(retained_prefix):
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                # Cleanup is best effort; the manifest already names the only
+                # snapshot that can be loaded.
+                pass
 
 
 def generate_global_grid_to_netcdf(
@@ -311,6 +347,10 @@ def _refine_compact_global_grid(
     )
 
     options = parent.options
+    parent_cell_count = parent.cells.shape[0]
+    stage_iterations = options.global_optimization.iterations
+    if parent_cell_count < GLOBAL_RELAXATION_LONG_ITER_CELL_THRESHOLD:
+        stage_iterations *= 10
     vertices, cells, provenance = gg._refine_triangles_bisection_with_provenance(
         parent.vertices,
         parent.cells,
@@ -378,12 +418,6 @@ def _refine_compact_global_grid(
         )
     del states
 
-    edges_of_vertex = _compact_edges_of_vertex(
-        edges, vertices.shape[0], options.accelerator
-    )
-    stage_iterations = options.global_optimization.iterations
-    if parent.cells.shape[0] < GLOBAL_RELAXATION_LONG_ITER_CELL_THRESHOLD:
-        stage_iterations *= 10
     export_provenance = None
     if terminal:
         export_provenance = BisectionProvenance(
@@ -396,6 +430,13 @@ def _refine_compact_global_grid(
             child_parent_edge_index=provenance.child_parent_edge_index,
             child_edge_parent_type=provenance.child_edge_parent_type,
         )
+    del cell_centers, edge_centers, provenance
+    _release_compact_arrays(parent)
+    del parent
+
+    edges_of_vertex = _compact_edges_of_vertex(
+        edges, vertices.shape[0], options.accelerator
+    )
     spring_grid = _CompactGlobalGrid(
         spec=spec,
         options=options,
@@ -408,7 +449,6 @@ def _refine_compact_global_grid(
         edge_primal_normal_cartesian=None,
         provenance=export_provenance,
     )
-    del cell_centers, edge_centers, parent, provenance
     if stage_iterations:
         vertices = _spring_relaxed_vertices(
             spring_grid,
@@ -430,6 +470,18 @@ def _refine_compact_global_grid(
     return spring_grid
 
 
+def _release_compact_arrays(grid: _CompactGlobalGrid) -> None:
+    """Release an owned parent after its child no longer needs its arrays."""
+    grid.vertices = np.empty((0, 3), dtype=np.float64)
+    grid.cells = np.empty((0, 3), dtype=np.int32)
+    grid.edges = np.empty((0, 2), dtype=np.int32)
+    grid.cell_edges = np.empty((0, 3), dtype=np.int32)
+    grid.edge_cells = np.empty((0, 2), dtype=np.int32)
+    grid.edges_of_vertex = np.empty((0, 6), dtype=np.int32)
+    grid.edge_primal_normal_cartesian = None
+    grid.provenance = None
+
+
 def _compute_parent_primal_normals(grid: _CompactGlobalGrid) -> np.ndarray:
     """Compute only the geometry retained for orienting the next stage."""
     return _accelerated.primal_normals_numba(
@@ -446,6 +498,18 @@ def _compact_edges_of_vertex(
     accelerator: str,
 ) -> np.ndarray:
     """Build one-based incident edge IDs without other connectivity tables."""
+    if _accelerated.should_use_numba(accelerator, edges.shape[0]):
+        incidence, oversized_vertex, oversized_count = (
+            _accelerated.edge_incidence_numba(edges, vertex_count, 6)
+        )
+        if oversized_vertex >= 0:
+            raise RuntimeError(
+                f"vertex {oversized_vertex} has {oversized_count} incident "
+                "edges, expected at most 6"
+            )
+        incidence.sort(axis=1)
+        return incidence
+
     from . import grid_generator as gg
 
     edge_ids = np.arange(1, edges.shape[0] + 1, dtype=np.int32)

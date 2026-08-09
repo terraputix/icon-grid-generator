@@ -80,9 +80,8 @@ public API documented in `README.md` and `docs/api.md`.
 - Geometry/topology changes must test counts, bounds, adjacency, finite numeric
   fields, and relevant metadata.
 - UUID behavior is a compatibility contract.
-- Keep local generated artifacts, exploratory comparison outputs, and cloned
-  external sources under `tmp/`; that directory is ignored and must stay out of
-  tracked docs, code, and assets.
+- Keep generated examples, cloned sources, and exploratory comparisons under
+  ignored `tmp/`. Keep benchmark scripts and results under ignored `profiling/`.
 - Do not add references to deprecated implementation paths or names in tracked
   docs, code, images, or generated assets.
 - Do not commit generated `dist/`, `build/`, `site/`, cache, or `tmp/` content.
@@ -96,7 +95,7 @@ python -m pip install -e ".[accelerate,test,docs,netcdf,xarray]"
 python -m pip install build twine
 ```
 
-Run the focused checks for normal code changes:
+Run the complete local check for code changes:
 
 ```bash
 make check
@@ -110,12 +109,6 @@ make package
 
 For docs-only changes, `make docs` is sufficient. If `make` is unavailable, use
 the commands in the `Makefile` directly.
-
-Before handing work back from an agent session, run the full local check:
-
-```bash
-make check
-```
 
 Run `make perf-check` after performance-sensitive grid-generation changes. It
 uses ignored local subprocess benchmarks and is intentionally not part of the

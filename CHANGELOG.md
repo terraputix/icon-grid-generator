@@ -4,6 +4,15 @@
 
 ## 0.6.0 - 2026-08-09
 
+- Release completed parent and center arrays before constructing child incidence,
+  and build large vertex-edge incidence directly without concatenated endpoint
+  arrays.
+- Publish checkpoint arrays as immutable snapshots selected by one atomic
+  manifest update, so interrupted overwrites leave the previous checkpoint
+  resumable.
+- Extend the optional performance regression suite to cover optimized spring
+  relaxation and end-to-end export-first NetCDF generation.
+
 - Add export-first global NetCDF generation with compact staged topology,
   disk-backed resumable checkpoints, bounded field serialization, and atomic
   output publication for grids too large to represent as a complete `IconGrid`.

@@ -11,7 +11,7 @@ grid = generate_grid("R2B4")
 grid.to_netcdf("icon_grid_R02B04.nc")
 ```
 
-The root import surface is intentionally small:
+The root package exports the primary grid specifications and generators:
 
 ```python
 from grid_generator import (
@@ -56,6 +56,8 @@ the requested output file. For large grids, put the output or an explicit
 `work_dir` on disk-backed scratch storage rather than a memory-backed temporary
 filesystem. Set `resume=False` to ignore existing checkpoints. `chunk_size`
 limits export-only work arrays, but does not partition the compact core topology.
+Checkpoint manifests atomically select immutable array snapshots; an interrupted
+overwrite therefore leaves the preceding completed snapshot resumable.
 If writing fails, the requested output is not published; the `.partial` file is
 left in place for diagnosis.
 
@@ -63,26 +65,20 @@ left in place for diagnosis.
 
 Both `grid.to_netcdf(..., fields=...)` and
 `generate_grid_to_netcdf(..., fields=...)` accept the same selector. The
-default remains the existing complete schema.
+default is the complete schema.
 
-| Profile | Fields | Audited consumer contract | Approximate R2B12 payload |
+| Profile | Fields | Consumer scope | Approximate R2B12 payload |
 | --- | ---: | --- | ---: |
-| `"full"` | 85 | Existing compatibility/reference output | 1,047.5 GiB |
-| `"reduced"` | 46 | Union required by current ICON and icon4py global-grid readers | 485 GiB |
-| `"icon"` | 38 | Current standard ICON triangular-grid importer | 410 GiB |
-| `"icon4py"` | 26 | Current icon4py spherical `GridManager` | 337.5 GiB |
+| `"full"` | 85 | Complete schema for general exchange | 1,047.5 GiB |
+| `"reduced"` | 46 | Union required by standard ICON and icon4py global-grid readers | 485 GiB |
+| `"icon"` | 38 | Standard ICON triangular-grid importer | 410 GiB |
+| `"icon4py"` | 26 | icon4py spherical `GridManager` | 337.5 GiB |
 
 The reduced and ICON profiles omit the complete Cartesian bundle so ICON uses
 its existing reconstruction fallback; a partial Cartesian bundle is not
-emitted. These contracts cover the audited standard global readers, not every
-ocean, coupling, output-copying, remapping, or institutional tool. Keep
-`"full"` for general exchange.
-
-The current upstream icon4py `GridManager` has smoke-loaded generated
-`"icon4py"` and `"reduced"` files. The ICON set was traced through the complete
-standard importer, including fallbacks and subdivision, but no built ICON
-executable was available for an initialization smoke; it is therefore a
-source-audited contract rather than a claim about every ICON run mode.
+emitted. These profiles cover the standard global readers, not every ocean,
+coupling, output-copying, remapping, or institutional tool. Use `"full"` for
+general exchange.
 
 Expert callers can pass an iterable of exact variable names instead of a
 profile. Unknown names and non-string members fail before expensive generation,
@@ -220,9 +216,8 @@ Advanced options:
   high-resolution global grids. Install `icon-grid-generator[accelerate]` for
   the measured large-grid performance.
 - `spring_beta` and `spring_iterations`: global spring relaxation controls.
-- `indexing`: accepts `"new"` or `"old"`. It is currently compatibility
-  metadata and part of grid identity; both values use the same deterministic
-  in-memory ordering implementation.
+- `indexing`: accepts `"new"` or `"old"`. It is compatibility metadata and part
+  of grid identity; both values use the same deterministic in-memory ordering.
 - `centre`, `subcentre`, and `number_of_grid_used`: exported metadata fields.
 
 Prefer `sphere_radius` for physical grid metrics. The lower-level `radius`
@@ -257,15 +252,15 @@ angular length
 target_angle = 1.164 * spring_beta * initial_mean_edge_angle
 ```
 
-The implementation integrates a damped velocity and spring-force system,
+The optimizer integrates a damped velocity and spring-force system,
 projects vertices back to the configured Cartesian `radius` after every step,
 and stops early when its force/kinetic-energy criteria are met. The intended
 effect is a more uniform distribution of edge lengths and cell areas than raw
 bisection; topology is identical.
 
 `B0` grids have no bisection stage, so the staged generator has no relaxation
-pass to apply even when `optimize_global=True`. The direct helper below can
-still relax such an already completed spherical grid.
+pass to apply even when `optimize_global=True`. The direct helper below relaxes
+an already completed spherical grid.
 
 - `optimize_global=True` enables the staged relaxation and is the default.
 - `spring_beta` controls the spring rest length. The default `0.9` is the
@@ -277,8 +272,8 @@ still relax such an already completed spherical grid.
 - `fixed_boundary` has no practical effect on a closed global grid because it
   has no open boundary vertices.
 
-Use `optimize_global=False` for raw bisection geometry when comparing algorithms
-or testing topology. It is not the normal grid-file path.
+Use `optimize_global=False` for raw bisection geometry diagnostics. It is not
+the normal grid-file path.
 
 The direct helper applies one spring-relaxation pass to an already generated
 spherical global grid:

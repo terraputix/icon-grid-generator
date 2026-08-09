@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from grid_generator import (
+    GlobalGridSpec,
     Region,
     TorusGridSpec,
     generate_grid,
@@ -245,6 +246,93 @@ def test_streamed_generation_rebuilds_non_exportable_intermediate_checkpoint(
     )
     assert output.is_file()
     assert '"has_provenance": true' in intermediate_manifest.read_text()
+
+
+def test_compact_refinement_releases_parent_and_center_arrays_before_incidence(
+    monkeypatch,
+):
+    pytest.importorskip("numba")
+    options = {"accelerator": "numba", "spring_iterations": 0}
+    parent = _streaming._compact_from_icon_grid(generate_grid("R01B00", options))
+    parent_array_refs = [
+        weakref.ref(value)
+        for value in (
+            parent.vertices,
+            parent.cells,
+            parent.edges,
+            parent.cell_edges,
+            parent.edge_cells,
+            parent.edges_of_vertex,
+            parent.edge_primal_normal_cartesian,
+        )
+    ]
+    center_refs = []
+    from grid_generator import grid_generator as gg
+
+    cell_centers = gg._cell_centers
+    edge_centers = gg._edge_centers
+    compact_edges = _streaming._compact_edges_of_vertex
+
+    def tracked_cell_centers(*args, **kwargs):
+        values = cell_centers(*args, **kwargs)
+        center_refs.append(weakref.ref(values))
+        return values
+
+    def tracked_edge_centers(*args, **kwargs):
+        values = edge_centers(*args, **kwargs)
+        center_refs.append(weakref.ref(values))
+        return values
+
+    def checked_compact_edges(*args, **kwargs):
+        assert all(reference() is None for reference in parent_array_refs)
+        assert all(reference() is None for reference in center_refs)
+        return compact_edges(*args, **kwargs)
+
+    monkeypatch.setattr(gg, "_cell_centers", tracked_cell_centers)
+    monkeypatch.setattr(gg, "_edge_centers", tracked_edge_centers)
+    monkeypatch.setattr(_streaming, "_compact_edges_of_vertex", checked_compact_edges)
+
+    child = _streaming._refine_compact_global_grid(
+        parent,
+        GlobalGridSpec(root=1, bisections=1),
+        terminal=True,
+    )
+
+    assert child.dims == {"cell": 80, "edge": 120, "vertex": 42}
+    assert parent.dims == {"cell": 0, "edge": 0, "vertex": 0}
+
+
+def test_checkpoint_interruption_preserves_previous_snapshot(monkeypatch, tmp_path):
+    options = {"optimize_global": False}
+    source = _streaming._compact_from_icon_grid(generate_grid("R01B00", options))
+    store_a = _streaming._CheckpointStore(tmp_path, "configuration-a")
+    store_a.save(source)
+    original_manifest = (tmp_path / "R01B00" / "manifest.json").read_text()
+    original_vertices = source.vertices.copy()
+
+    replacement = _streaming._compact_from_icon_grid(generate_grid("R01B00", options))
+    replacement.vertices = replacement.vertices.copy()
+    replacement.vertices[0, 0] = 123.0
+    store_b = _streaming._CheckpointStore(tmp_path, "configuration-b")
+    replace = _streaming.os.replace
+    replacement_count = 0
+
+    def interrupt_after_first_array(source_path, destination_path):
+        nonlocal replacement_count
+        replacement_count += 1
+        replace(source_path, destination_path)
+        if replacement_count == 1:
+            raise RuntimeError("simulated checkpoint interruption")
+
+    monkeypatch.setattr(_streaming.os, "replace", interrupt_after_first_array)
+    with pytest.raises(RuntimeError, match="simulated checkpoint interruption"):
+        store_b.save(replacement)
+
+    assert (tmp_path / "R01B00" / "manifest.json").read_text() == original_manifest
+    resumed = store_a.load(source.spec, source.options)
+    assert resumed is not None
+    assert np.array_equal(resumed.vertices, original_vertices)
+    assert store_b.load(replacement.spec, replacement.options) is None
 
 
 def test_streamed_generation_does_not_publish_incomplete_output(monkeypatch, tmp_path):
