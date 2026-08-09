@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 import getpass
 from pathlib import Path
@@ -294,57 +295,53 @@ def _write_icon_attributes(dataset: Any, grid: Any, path: Path) -> None:
         dataset.setncattr(name, value)
 
 
-def _icon_fields(grid: Any) -> list[IconNetcdfField]:
-    fields = (
-        _coordinate_fields(grid)
-        + _connectivity_fields(grid)
-        + _metric_fields(grid)
-        + _refinement_fields_for_netcdf(grid)
-        + _static_surface_fields(grid)
-        + _cartesian_fields(grid)
-        + _normal_vector_fields(grid)
-        + _hierarchy_fields(grid)
+def _icon_fields(grid: Any) -> Iterator[IconNetcdfField]:
+    """Yield field groups incrementally to bound export-time memory."""
+    builders = (
+        _coordinate_fields,
+        _connectivity_fields,
+        _metric_fields,
+        _refinement_fields_for_netcdf,
+        _static_surface_fields,
+        _cartesian_fields,
+        _normal_vector_fields,
+        _hierarchy_fields,
     )
-    return [
-        (name, dims, data, _with_icon_variable_attrs(name, attrs))
-        for name, dims, data, attrs in fields
-    ]
+    for builder in builders:
+        for name, dims, data, attrs in builder(grid):
+            yield name, dims, data, _with_icon_variable_attrs(name, attrs)
 
 
-def _coordinate_fields(grid: Any) -> list[IconNetcdfField]:
-    edge_bounds_lon, edge_bounds_lat = _edge_lon_lat_bounds(grid)
-    return [
-        ("clon", ("cell",), np.radians(grid.lon), {"units": "radian"}),
-        ("clat", ("cell",), np.radians(grid.lat), {"units": "radian"}),
-        ("clon_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lon), {"units": "radian"}),
-        ("clat_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lat), {"units": "radian"}),
-        ("vlon", ("vertex",), np.radians(grid.vertex_lon), {"units": "radian"}),
-        ("vlat", ("vertex",), np.radians(grid.vertex_lat), {"units": "radian"}),
-        ("elon", ("edge",), np.radians(grid.edge_lon), {"units": "radian"}),
-        ("elat", ("edge",), np.radians(grid.edge_lat), {"units": "radian"}),
-        ("elon_vertices", ("edge", "no"), edge_bounds_lon, {"units": "radian"}),
-        ("elat_vertices", ("edge", "no"), edge_bounds_lat, {"units": "radian"}),
-        ("lon_cell_centre", ("cell",), np.radians(grid.lon), {"units": "radian"}),
-        ("lat_cell_centre", ("cell",), np.radians(grid.lat), {"units": "radian"}),
-        ("longitude_vertices", ("vertex",), np.radians(grid.vertex_lon), {"units": "radian"}),
-        ("latitude_vertices", ("vertex",), np.radians(grid.vertex_lat), {"units": "radian"}),
-        ("lon_edge_centre", ("edge",), np.radians(grid.edge_lon), {"units": "radian"}),
-        ("lat_edge_centre", ("edge",), np.radians(grid.edge_lat), {"units": "radian"}),
-    ]
+def _coordinate_fields(grid: Any) -> Iterator[IconNetcdfField]:
+    attrs = {"units": "radian"}
+    yield "clon", ("cell",), np.radians(grid.lon), attrs
+    yield "clat", ("cell",), np.radians(grid.lat), attrs
+    yield "clon_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lon), attrs
+    yield "clat_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lat), attrs
+    yield "vlon", ("vertex",), np.radians(grid.vertex_lon), attrs
+    yield "vlat", ("vertex",), np.radians(grid.vertex_lat), attrs
+    yield "elon", ("edge",), np.radians(grid.edge_lon), attrs
+    yield "elat", ("edge",), np.radians(grid.edge_lat), attrs
+    yield "elon_vertices", ("edge", "no"), _edge_coordinate_bounds(grid, "lon"), attrs
+    yield "elat_vertices", ("edge", "no"), _edge_coordinate_bounds(grid, "lat"), attrs
+    yield "lon_cell_centre", ("cell",), np.radians(grid.lon), attrs
+    yield "lat_cell_centre", ("cell",), np.radians(grid.lat), attrs
+    yield "longitude_vertices", ("vertex",), np.radians(grid.vertex_lon), attrs
+    yield "latitude_vertices", ("vertex",), np.radians(grid.vertex_lat), attrs
+    yield "lon_edge_centre", ("edge",), np.radians(grid.edge_lon), attrs
+    yield "lat_edge_centre", ("edge",), np.radians(grid.edge_lat), attrs
 
 
-def _connectivity_fields(grid: Any) -> list[IconNetcdfField]:
+def _connectivity_fields(grid: Any) -> Iterator[IconNetcdfField]:
     connectivity = grid.icon_connectivity
-    return [
-        ("edge_of_cell", ("nv", "cell"), connectivity["c2e"].T + 1, {}),
-        ("vertex_of_cell", ("nv", "cell"), grid.cells.T + 1, {}),
-        ("neighbor_cell_index", ("nv", "cell"), connectivity["c2c"].T + 1, {}),
-        ("adjacent_cell_of_edge", ("nc", "edge"), grid.edge_cells.T + 1, {}),
-        ("edge_vertices", ("nc", "edge"), grid.edges.T + 1, {}),
-        ("cells_of_vertex", ("ne", "vertex"), connectivity["v2c"].T, {}),
-        ("edges_of_vertex", ("ne", "vertex"), connectivity["v2e"].T, {}),
-        ("vertices_of_vertex", ("ne", "vertex"), connectivity["v2v"].T, {}),
-    ]
+    yield "edge_of_cell", ("nv", "cell"), connectivity["c2e"].T + 1, {}
+    yield "vertex_of_cell", ("nv", "cell"), grid.cells.T + 1, {}
+    yield "neighbor_cell_index", ("nv", "cell"), connectivity["c2c"].T + 1, {}
+    yield "adjacent_cell_of_edge", ("nc", "edge"), grid.edge_cells.T + 1, {}
+    yield "edge_vertices", ("nc", "edge"), grid.edges.T + 1, {}
+    yield "cells_of_vertex", ("ne", "vertex"), connectivity["v2c"].T, {}
+    yield "edges_of_vertex", ("ne", "vertex"), connectivity["v2e"].T, {}
+    yield "vertices_of_vertex", ("ne", "vertex"), connectivity["v2v"].T, {}
 
 
 def _metric_fields(grid: Any) -> list[IconNetcdfField]:
@@ -398,45 +395,50 @@ def _refinement_fields_for_netcdf(grid: Any) -> list[IconNetcdfField]:
     ]
 
 
-def _static_surface_fields(grid: Any) -> list[IconNetcdfField]:
-    zeros_cell = np.zeros(grid.dims["cell"], dtype=np.float64)
-    zeros_edge = np.zeros(grid.dims["edge"], dtype=np.float64)
-    return [
-        ("cell_elevation", ("cell",), zeros_cell, {"units": "m"}),
-        ("edge_elevation", ("edge",), zeros_edge, {"units": "m"}),
-        ("cell_sea_land_mask", ("cell",), np.zeros(grid.dims["cell"], dtype=np.int32), {}),
-        ("edge_sea_land_mask", ("edge",), np.zeros(grid.dims["edge"], dtype=np.int32), {}),
-    ]
+def _static_surface_fields(grid: Any) -> Iterator[IconNetcdfField]:
+    yield "cell_elevation", ("cell",), np.zeros(grid.dims["cell"]), {"units": "m"}
+    yield "edge_elevation", ("edge",), np.zeros(grid.dims["edge"]), {"units": "m"}
+    yield "cell_sea_land_mask", ("cell",), np.zeros(grid.dims["cell"], dtype=np.int32), {}
+    yield "edge_sea_land_mask", ("edge",), np.zeros(grid.dims["edge"], dtype=np.int32), {}
 
 
-def _cartesian_fields(grid: Any) -> list[IconNetcdfField]:
+def _cartesian_fields(grid: Any) -> Iterator[IconNetcdfField]:
     if grid.metadata.get("grid_geometry") == 2:
         unit_vertices = grid.vertices
-        unit_centers = grid.cell_center_xyz
-        unit_edge_centers = grid.edge_center_xyz
     else:
         unit_vertices = _gg()._normalize_rows(grid.vertices)
-        unit_centers = _gg()._normalize_rows(grid.cell_center_xyz)
-        unit_edge_centers = _gg()._normalize_rows(grid.edge_center_xyz)
-    return [
-        ("cartesian_x_vertices", ("vertex",), unit_vertices[:, 0], {"units": "meters"}),
-        ("cartesian_y_vertices", ("vertex",), unit_vertices[:, 1], {"units": "meters"}),
-        ("cartesian_z_vertices", ("vertex",), unit_vertices[:, 2], {"units": "meters"}),
-        ("cell_circumcenter_cartesian_x", ("cell",), unit_centers[:, 0], {"units": "meters"}),
-        ("cell_circumcenter_cartesian_y", ("cell",), unit_centers[:, 1], {"units": "meters"}),
-        ("cell_circumcenter_cartesian_z", ("cell",), unit_centers[:, 2], {"units": "meters"}),
-        ("edge_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], {"units": "meters"}),
-        ("edge_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], {"units": "meters"}),
-        ("edge_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], {"units": "meters"}),
-        ("phys_cell_id", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}),
-        ("phys_edge_id", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}),
-        ("cell_index", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}),
-        ("edge_index", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}),
-        ("vertex_index", ("vertex",), np.arange(1, grid.dims["vertex"] + 1, dtype=np.int32), {}),
-        ("edge_dual_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], {"units": "meters"}),
-        ("edge_dual_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], {"units": "meters"}),
-        ("edge_dual_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], {"units": "meters"}),
-    ]
+    attrs = {"units": "meters"}
+    yield "cartesian_x_vertices", ("vertex",), unit_vertices[:, 0], attrs
+    yield "cartesian_y_vertices", ("vertex",), unit_vertices[:, 1], attrs
+    yield "cartesian_z_vertices", ("vertex",), unit_vertices[:, 2], attrs
+    del unit_vertices
+
+    unit_centers = (
+        grid.cell_center_xyz
+        if grid.metadata.get("grid_geometry") == 2
+        else _gg()._normalize_rows(grid.cell_center_xyz)
+    )
+    yield "cell_circumcenter_cartesian_x", ("cell",), unit_centers[:, 0], attrs
+    yield "cell_circumcenter_cartesian_y", ("cell",), unit_centers[:, 1], attrs
+    yield "cell_circumcenter_cartesian_z", ("cell",), unit_centers[:, 2], attrs
+    del unit_centers
+
+    unit_edge_centers = (
+        grid.edge_center_xyz
+        if grid.metadata.get("grid_geometry") == 2
+        else _gg()._normalize_rows(grid.edge_center_xyz)
+    )
+    yield "edge_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], attrs
+    yield "edge_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], attrs
+    yield "edge_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], attrs
+    yield "phys_cell_id", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}
+    yield "phys_edge_id", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}
+    yield "cell_index", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}
+    yield "edge_index", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}
+    yield "vertex_index", ("vertex",), np.arange(1, grid.dims["vertex"] + 1, dtype=np.int32), {}
+    yield "edge_dual_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], attrs
+    yield "edge_dual_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], attrs
+    yield "edge_dual_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], attrs
 
 
 def _normal_vector_fields(grid: Any) -> list[IconNetcdfField]:
@@ -495,19 +497,17 @@ def _normal_vector_fields(grid: Any) -> list[IconNetcdfField]:
     ]
 
 
-def _hierarchy_fields(grid: Any) -> list[IconNetcdfField]:
+def _hierarchy_fields(grid: Any) -> Iterator[IconNetcdfField]:
     refinement = grid.refinement
-    return [
-        ("parent_cell_index", ("cell",), refinement["parent_cell_index"], {}),
-        ("parent_cell_type", ("cell",), refinement["parent_cell_type"], {}),
-        ("edge_parent_type", ("edge",), refinement["edge_parent_type"], {}),
-        ("parent_edge_index", ("edge",), refinement["parent_edge_index"], {}),
-        ("parent_vertex_index", ("vertex",), refinement["parent_vertex_index"], {}),
-        ("child_cell_index", ("no", "cell"), np.zeros((4, grid.dims["cell"]), dtype=np.int32), {}),
-        ("child_cell_id", ("cell",), np.zeros(grid.dims["cell"], dtype=np.int32), {}),
-        ("child_edge_index", ("no", "edge"), np.zeros((4, grid.dims["edge"]), dtype=np.int32), {}),
-        ("child_edge_id", ("edge",), np.zeros(grid.dims["edge"], dtype=np.int32), {}),
-    ]
+    yield "parent_cell_index", ("cell",), refinement["parent_cell_index"], {}
+    yield "parent_cell_type", ("cell",), refinement["parent_cell_type"], {}
+    yield "edge_parent_type", ("edge",), refinement["edge_parent_type"], {}
+    yield "parent_edge_index", ("edge",), refinement["parent_edge_index"], {}
+    yield "parent_vertex_index", ("vertex",), refinement["parent_vertex_index"], {}
+    yield "child_cell_index", ("no", "cell"), np.zeros((4, grid.dims["cell"]), dtype=np.int32), {}
+    yield "child_cell_id", ("cell",), np.zeros(grid.dims["cell"], dtype=np.int32), {}
+    yield "child_edge_index", ("no", "edge"), np.zeros((4, grid.dims["edge"]), dtype=np.int32), {}
+    yield "child_edge_id", ("edge",), np.zeros(grid.dims["edge"], dtype=np.int32), {}
 
 
 def _with_icon_variable_attrs(name: str, attrs: dict[str, Any]) -> dict[str, Any]:
@@ -523,29 +523,63 @@ def _edge_lon_lat_bounds(grid: Any) -> tuple[np.ndarray, np.ndarray]:
     first edge vertex, second adjacent cell center, second edge vertex, first
     adjacent cell center.
     """
+    return _edge_coordinate_bounds(grid, "lon"), _edge_coordinate_bounds(grid, "lat")
+
+
+def _edge_coordinate_bounds(grid: Any, coordinate: str) -> np.ndarray:
     edge_vertices = np.asarray(grid.edges, dtype=np.int32)
     edge_cells = np.asarray(grid.edge_cells, dtype=np.int32)
-    lon = np.empty((grid.dims["edge"], 4), dtype=np.float64)
-    lat = np.empty((grid.dims["edge"], 4), dtype=np.float64)
-
-    lon[:, 0] = grid.vertex_lon[edge_vertices[:, 0]]
-    lat[:, 0] = grid.vertex_lat[edge_vertices[:, 0]]
+    vertex_values = grid.vertex_lon if coordinate == "lon" else grid.vertex_lat
+    cell_values = grid.lon if coordinate == "lon" else grid.lat
+    edge_values = grid.edge_lon if coordinate == "lon" else grid.edge_lat
+    values = np.empty((grid.dims["edge"], 4), dtype=np.float64)
+    values[:, 0] = vertex_values[edge_vertices[:, 0]]
     second_cell = edge_cells[:, 1]
-    second_cell_lon = np.where(second_cell >= 0, grid.lon[np.maximum(second_cell, 0)], grid.edge_lon)
-    second_cell_lat = np.where(second_cell >= 0, grid.lat[np.maximum(second_cell, 0)], grid.edge_lat)
-    lon[:, 1] = second_cell_lon
-    lat[:, 1] = second_cell_lat
-    lon[:, 2] = grid.vertex_lon[edge_vertices[:, 1]]
-    lat[:, 2] = grid.vertex_lat[edge_vertices[:, 1]]
+    values[:, 1] = np.where(
+        second_cell >= 0,
+        cell_values[np.maximum(second_cell, 0)],
+        edge_values,
+    )
+    values[:, 2] = vertex_values[edge_vertices[:, 1]]
     first_cell = edge_cells[:, 0]
-    first_cell_lon = np.where(first_cell >= 0, grid.lon[np.maximum(first_cell, 0)], grid.edge_lon)
-    first_cell_lat = np.where(first_cell >= 0, grid.lat[np.maximum(first_cell, 0)], grid.edge_lat)
-    lon[:, 3] = first_cell_lon
-    lat[:, 3] = first_cell_lat
-
-    pole_mask = np.isclose(np.abs(lat), 90.0)
-    lon[pole_mask] = np.repeat(grid.edge_lon[:, np.newaxis], 4, axis=1)[pole_mask]
-    return np.radians(lon), np.radians(lat)
+    values[:, 3] = np.where(
+        first_cell >= 0,
+        cell_values[np.maximum(first_cell, 0)],
+        edge_values,
+    )
+    if coordinate == "lon":
+        pole_mask = np.empty_like(values, dtype=bool)
+        pole_mask[:, 0] = np.isclose(
+            np.abs(grid.vertex_lat[edge_vertices[:, 0]]),
+            90.0,
+        )
+        pole_mask[:, 1] = np.isclose(
+            np.abs(
+                np.where(
+                    second_cell >= 0,
+                    grid.lat[np.maximum(second_cell, 0)],
+                    grid.edge_lat,
+                )
+            ),
+            90.0,
+        )
+        pole_mask[:, 2] = np.isclose(
+            np.abs(grid.vertex_lat[edge_vertices[:, 1]]),
+            90.0,
+        )
+        pole_mask[:, 3] = np.isclose(
+            np.abs(
+                np.where(
+                    first_cell >= 0,
+                    grid.lat[np.maximum(first_cell, 0)],
+                    grid.edge_lat,
+                )
+            ),
+            90.0,
+        )
+        pole_edges, pole_slots = np.nonzero(pole_mask)
+        values[pole_edges, pole_slots] = edge_values[pole_edges]
+    return np.radians(values)
 
 
 def _gg() -> Any:
