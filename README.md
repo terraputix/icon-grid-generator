@@ -25,6 +25,31 @@ print(grid.dims)
 grid.to_netcdf("icon_grid_R02B04.nc")
 ```
 
+For global grids too large to retain as a complete `IconGrid`, stream directly
+to NetCDF with bounded derived-field memory and optional stage checkpoints:
+
+```py
+from grid_generator import generate_grid_to_netcdf
+
+generate_grid_to_netcdf(
+    "R2B12",
+    "icon_grid_R02B12.nc",
+    options={"max_cells": None, "accelerator": "numba"},
+    work_dir="icon-grid-R2B12-work",
+    fields="reduced",
+)
+```
+
+When `work_dir` is omitted, resumable checkpoints are kept in a hidden directory
+beside the requested NetCDF file. For large runs, place either the output or an
+explicit `work_dir` on disk-backed scratch storage; memory-backed temporary
+filesystems are not suitable for these checkpoints.
+
+NetCDF export writes the complete 85-field schema by default. Select
+`fields="reduced"` for the audited 46-field union consumed by current ICON and
+icon4py global-grid readers, or use `"icon"`, `"icon4py"`, or an explicit list
+of field names for a narrower consumer contract.
+
 ```text
 R02B04
 {'cell': 20480, 'vertex': 10242, 'edge': 30720}
@@ -63,19 +88,21 @@ Optimized global grids were measured on an exclusive dual-socket AMD EPYC 7713
 node with 128 physical cores (256 hardware threads) and about 446 GiB of
 scheduler-visible memory. Python 3.11, NumPy 2.4.6, Numba 0.66, and 128 Numba
 threads were used. Times are single runs and storage is uncompressed ICON-style
-NetCDF; shared-filesystem write time varies with load.
+NetCDF using the default full schema; shared-filesystem write time varies with
+load.
 
-| Grid | Cells | Generation | Peak RSS | Retained arrays | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `R2B8` | 5,242,880 | 56.5 s | 4.35 GiB | 3.01 GiB | 4.09 GiB |
-| `R2B9` | 20,971,520 | 2.02 min | 16.57 GiB | 12.03 GiB | 16.37 GiB |
-| `R2B10` | 83,886,080 | 6.13 min | 64.85 GiB | 48.13 GiB | ~65.5 GiB |
-| `R2B11` | 335,544,320 | 37.10 min | 255.87 GiB | 192.50 GiB | 261.88 GiB |
+| Grid | Cells | Generation | Serialization/write | Peak RSS | Checkpoints | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R2B8` | 5,242,880 | 50.6 s | 19.0 s | 1.92 GiB | 0.77 GiB | 4.09 GiB |
+| `R2B9` | 20,971,520 | 1.42 min | 51.3 s | 6.48 GiB | 3.20 GiB | 16.37 GiB |
+| `R2B10` | 83,886,080 | 4.09 min | 3.12 min | 23.99 GiB | 12.92 GiB | 65.47 GiB |
+| `R2B11` | 335,544,320 | 12.52 min | 15.50 min | 94.25 GiB | 51.83 GiB | 261.88 GiB |
 
-The R2B11 file was written and validated in another 8.52 minutes, for a
-45.83-minute end-to-end run. Install `accelerate`, set `max_cells=None`, and
-leave `accelerator="auto"` or select `"numba"` explicitly for this scaling
-regime. See [Performance and Scaling](https://ofuhrer.github.io/icon-grid-generator/design/#performance-and-scaling)
+Generation includes resumable checkpoint writes; checkpoint storage is the
+cumulative logical size at completion. The R2B11 file was reopened with all 85
+variables and its expected UUID, then removed. Install `accelerate`, set
+`max_cells=None`, and leave `accelerator="auto"` or select `"numba"`
+explicitly for this scaling regime. See [Performance and Scaling](https://ofuhrer.github.io/icon-grid-generator/design/#performance-and-scaling)
 for methodology, caveats, and the main remaining bottlenecks.
 
 ## Documentation

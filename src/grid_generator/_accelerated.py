@@ -79,6 +79,23 @@ def order_cells_by_edges_numba(
     )
 
 
+def orient_closed_cells_inplace_numba(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    edges: np.ndarray,
+    cell_edges: np.ndarray,
+    edge_cells: np.ndarray,
+) -> tuple[int, int]:
+    """Rotate validated spherical cells in place without geometry work arrays."""
+    return _compiled_orient_closed_cells_inplace()(
+        vertices,
+        cells,
+        edges,
+        cell_edges,
+        edge_cells,
+    )
+
+
 def lookup_width2_numba(
     signature_keys: np.ndarray,
     parent_index_values: np.ndarray,
@@ -135,6 +152,33 @@ def fill_bisection_children_numba(
     )
 
 
+def refine_closed_bisection_numba(
+    cells: np.ndarray,
+    edge_vertices: np.ndarray,
+    cell_edges: np.ndarray,
+    edge_cells: np.ndarray,
+    old_vertex_count: int,
+    edge_child_type_from_vertex_0: int,
+    edge_child_type_from_vertex_1: int,
+    edge_child_type_in_cell_opposite_vertex_0: int,
+    edge_child_type_in_cell_opposite_vertex_1: int,
+    edge_child_type_in_cell_opposite_vertex_2: int,
+) -> tuple[np.ndarray, ...]:
+    """Refine a validated closed topology without sorting child incidences."""
+    return _compiled_refine_closed_bisection()(
+        cells,
+        edge_vertices,
+        cell_edges,
+        edge_cells,
+        old_vertex_count,
+        edge_child_type_from_vertex_0,
+        edge_child_type_from_vertex_1,
+        edge_child_type_in_cell_opposite_vertex_0,
+        edge_child_type_in_cell_opposite_vertex_1,
+        edge_child_type_in_cell_opposite_vertex_2,
+    )
+
+
 def spring_relaxation_numba(
     vertices: np.ndarray,
     edges: np.ndarray,
@@ -157,6 +201,11 @@ def spring_relaxation_numba(
         target_length,
         iterations,
     )
+
+
+def mean_edge_angle_numba(vertices: np.ndarray, edges: np.ndarray) -> float:
+    """Return the mean spherical edge angle without materializing edge gathers."""
+    return float(_compiled_mean_edge_angle()(vertices, edges))
 
 
 def dual_areas_from_edges_numba(
@@ -233,6 +282,24 @@ def spherical_edge_metrics_numba(
     return result[:-1]
 
 
+def primal_normals_numba(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    edges: np.ndarray,
+    edge_cells: np.ndarray,
+) -> np.ndarray:
+    """Compute only oriented primal edge normals for a closed spherical grid."""
+    normals, degenerate_count = _compiled_primal_normals()(
+        vertices,
+        cells,
+        edges,
+        edge_cells,
+    )
+    if degenerate_count:
+        raise RuntimeError("edge system orientation is degenerate for at least one edge")
+    return normals
+
+
 def cell_centers_numba(
     vertices: np.ndarray,
     cells: np.ndarray,
@@ -302,12 +369,48 @@ def apply_global_edge_flips_numba(
     )
 
 
+def apply_edge_flips_numba(
+    edges: np.ndarray,
+    edge_cells: np.ndarray,
+    states: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply orientation flips without constructing dependent sign tables."""
+    empty_cells = np.empty((0, 3), dtype=np.int32)
+    empty_vertices = np.empty((0, 6), dtype=np.int32)
+    adjusted_edges, adjusted_edge_cells, _, _ = _compiled_apply_global_edge_flips()(
+        edges,
+        edge_cells,
+        empty_cells,
+        empty_vertices,
+        empty_cells,
+        empty_vertices,
+        states,
+    )
+    return adjusted_edges, adjusted_edge_cells
+
+
 def reindex_closed_topology_for_refinement_numba(
     cells: np.ndarray,
     cell_edges: np.ndarray,
     edge_cells: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Recover deterministic first-seen edge order from existing topology."""
+    edges, reordered_cell_edges, _, emitted_count = (
+        _compiled_reindex_closed_topology_for_refinement()(
+            cells,
+            cell_edges,
+            edge_cells,
+        )
+    )
+    return edges, reordered_cell_edges, emitted_count
+
+
+def reindex_closed_topology_with_adjacency_numba(
+    cells: np.ndarray,
+    cell_edges: np.ndarray,
+    edge_cells: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Recover deterministic edge order together with aligned adjacency."""
     return _compiled_reindex_closed_topology_for_refinement()(
         cells,
         cell_edges,
@@ -371,7 +474,12 @@ def _compiled_reindex_closed_topology_for_refinement():
         for cell in prange(cell_edges.shape[0]):
             for slot in range(3):
                 reordered_cell_edges[cell, slot] = old_to_new[cell_edges[cell, slot]]
-        return edges, reordered_cell_edges, emitted_count
+        reordered_edge_cells = np.empty_like(edge_cells)
+        for old_edge in prange(edge_cells.shape[0]):
+            new_edge = old_to_new[old_edge]
+            reordered_edge_cells[new_edge, 0] = edge_cells[old_edge, 0]
+            reordered_edge_cells[new_edge, 1] = edge_cells[old_edge, 1]
+        return edges, reordered_cell_edges, reordered_edge_cells, emitted_count
 
     return recover
 
@@ -446,7 +554,18 @@ def _compiled_global_edge_orientation_states():
             cross_y = vertex_dz * cell_dx - vertex_dx * cell_dz
             cross_z = vertex_dx * cell_dy - vertex_dy * cell_dx
             outward = cross_x * edge_x + cross_y * edge_y + cross_z * edge_z
-            if np.abs(outward) <= 1.0e-8:
+            direction_scale = np.sqrt(
+                vertex_dx * vertex_dx
+                + vertex_dy * vertex_dy
+                + vertex_dz * vertex_dz
+            ) * np.sqrt(
+                cell_dx * cell_dx + cell_dy * cell_dy + cell_dz * cell_dz
+            )
+            if (
+                not np.isfinite(outward)
+                or np.abs(outward)
+                <= 64.0 * np.finfo(np.float64).eps * direction_scale
+            ):
                 states[edge] = 0
                 degenerate_count += 1
                 continue
@@ -828,7 +947,18 @@ def _compiled_spherical_edge_metrics():
             cross_y = vertex_dz * cell_dx - vertex_dx * cell_dz
             cross_z = vertex_dx * cell_dy - vertex_dy * cell_dx
             outward = cross_x * edge_x + cross_y * edge_y + cross_z * edge_z
-            if np.abs(outward) <= 1.0e-8:
+            direction_scale = np.sqrt(
+                vertex_dx * vertex_dx
+                + vertex_dy * vertex_dy
+                + vertex_dz * vertex_dz
+            ) * np.sqrt(
+                cell_dx * cell_dx + cell_dy * cell_dy + cell_dz * cell_dz
+            )
+            if (
+                not np.isfinite(outward)
+                or np.abs(outward)
+                <= 64.0 * np.finfo(np.float64).eps * direction_scale
+            ):
                 degenerate_count += 1
             orientation = 1 if outward > 0.0 else -1
             edge_system_orientation[edge] = orientation
@@ -888,6 +1018,109 @@ def _compiled_spherical_edge_metrics():
             dual_v,
             degenerate_count,
         )
+
+    return compute
+
+
+@lru_cache(maxsize=1)
+def _compiled_primal_normals():
+    from numba import njit, prange
+
+    @njit(inline="always")
+    def unit_cell_center(vertices, cells, cell):
+        x = 0.0
+        y = 0.0
+        z = 0.0
+        for slot in range(3):
+            vertex = cells[cell, slot]
+            x += vertices[vertex, 0]
+            y += vertices[vertex, 1]
+            z += vertices[vertex, 2]
+        norm = np.sqrt(x * x + y * y + z * z)
+        return x / norm, y / norm, z / norm
+
+    @njit(parallel=True)
+    def compute(vertices, cells, edges, edge_cells):
+        normals = np.empty((edges.shape[0], 3), dtype=np.float64)
+        degenerate_count = 0
+        for edge in prange(edges.shape[0]):
+            vertex_0 = edges[edge, 0]
+            vertex_1 = edges[edge, 1]
+            v0x = vertices[vertex_0, 0]
+            v0y = vertices[vertex_0, 1]
+            v0z = vertices[vertex_0, 2]
+            v1x = vertices[vertex_1, 0]
+            v1y = vertices[vertex_1, 1]
+            v1z = vertices[vertex_1, 2]
+            v0norm = np.sqrt(v0x * v0x + v0y * v0y + v0z * v0z)
+            v1norm = np.sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+            v0x /= v0norm
+            v0y /= v0norm
+            v0z /= v0norm
+            v1x /= v1norm
+            v1y /= v1norm
+            v1z /= v1norm
+
+            edge_x = v0x + v1x
+            edge_y = v0y + v1y
+            edge_z = v0z + v1z
+            edge_norm = np.sqrt(
+                edge_x * edge_x + edge_y * edge_y + edge_z * edge_z
+            )
+            edge_x /= edge_norm
+            edge_y /= edge_norm
+            edge_z /= edge_norm
+
+            adjacent_0 = edge_cells[edge, 0]
+            adjacent_1 = edge_cells[edge, 1]
+            c0x, c0y, c0z = unit_cell_center(vertices, cells, adjacent_0)
+            c1x, c1y, c1z = unit_cell_center(vertices, cells, adjacent_1)
+            vertex_dx = v1x - v0x
+            vertex_dy = v1y - v0y
+            vertex_dz = v1z - v0z
+            cell_dx = c1x - c0x
+            cell_dy = c1y - c0y
+            cell_dz = c1z - c0z
+            cross_x = vertex_dy * cell_dz - vertex_dz * cell_dy
+            cross_y = vertex_dz * cell_dx - vertex_dx * cell_dz
+            cross_z = vertex_dx * cell_dy - vertex_dy * cell_dx
+            outward = cross_x * edge_x + cross_y * edge_y + cross_z * edge_z
+            direction_scale = np.sqrt(
+                vertex_dx * vertex_dx
+                + vertex_dy * vertex_dy
+                + vertex_dz * vertex_dz
+            ) * np.sqrt(
+                cell_dx * cell_dx + cell_dy * cell_dy + cell_dz * cell_dz
+            )
+            if (
+                not np.isfinite(outward)
+                or np.abs(outward)
+                <= 64.0 * np.finfo(np.float64).eps * direction_scale
+            ):
+                degenerate_count += 1
+            orientation = 1.0 if outward > 0.0 else -1.0
+
+            tangent_x = orientation * vertex_dx
+            tangent_y = orientation * vertex_dy
+            tangent_z = orientation * vertex_dz
+            tangent_norm = np.sqrt(
+                tangent_x * tangent_x
+                + tangent_y * tangent_y
+                + tangent_z * tangent_z
+            )
+            tangent_x /= tangent_norm
+            tangent_y /= tangent_norm
+            tangent_z /= tangent_norm
+            normal_x = edge_y * tangent_z - edge_z * tangent_y
+            normal_y = edge_z * tangent_x - edge_x * tangent_z
+            normal_z = edge_x * tangent_y - edge_y * tangent_x
+            normal_norm = np.sqrt(
+                normal_x * normal_x + normal_y * normal_y + normal_z * normal_z
+            )
+            normals[edge, 0] = normal_x / normal_norm
+            normals[edge, 1] = normal_y / normal_norm
+            normals[edge, 2] = normal_z / normal_norm
+        return normals, degenerate_count
 
     return compute
 
@@ -1073,7 +1306,12 @@ def _compiled_spring_relaxation():
     def relax(vertices, edges, incident_edges, movable, len0, maxit):
         velocity = np.zeros_like(vertices)
         spring = np.zeros_like(vertices)
-        fixed_vertices = vertices.copy()
+        all_movable = np.all(movable)
+        fixed_vertices = (
+            np.empty((0, vertices.shape[1]), dtype=vertices.dtype)
+            if all_movable
+            else vertices.copy()
+        )
         inv_sqrt2 = 1.0 / np.sqrt(2.0)
         epsilon = np.finfo(np.float64).eps
         max_ekin = 0.0
@@ -1162,7 +1400,7 @@ def _compiled_spring_relaxation():
                         + spring[vertex, 1] * spring[vertex, 1]
                         + spring[vertex, 2] * spring[vertex, 2]
                     )
-                else:
+                elif not all_movable:
                     vertices[vertex, 0] = fixed_vertices[vertex, 0]
                     vertices[vertex, 1] = fixed_vertices[vertex, 1]
                     vertices[vertex, 2] = fixed_vertices[vertex, 2]
@@ -1182,6 +1420,31 @@ def _compiled_spring_relaxation():
         return vertices, completed_iterations
 
     return relax
+
+
+@lru_cache(maxsize=1)
+def _compiled_mean_edge_angle():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(vertices, edges):
+        angle_sum = 0.0
+        for edge in prange(edges.shape[0]):
+            first = edges[edge, 0]
+            second = edges[edge, 1]
+            dot = (
+                vertices[first, 0] * vertices[second, 0]
+                + vertices[first, 1] * vertices[second, 1]
+                + vertices[first, 2] * vertices[second, 2]
+            )
+            if dot < -1.0:
+                dot = -1.0
+            elif dot > 1.0:
+                dot = 1.0
+            angle_sum += np.arccos(dot)
+        return angle_sum / edges.shape[0]
+
+    return compute
 
 
 @lru_cache(maxsize=1)
@@ -1238,6 +1501,295 @@ def _compiled_order_cells_by_edges():
         return ordered_cells, ordered_cell_edges, -1, 0
 
     return order
+
+
+@lru_cache(maxsize=1)
+def _compiled_orient_closed_cells_inplace():
+    from numba import njit, prange
+
+    @njit(inline="always")
+    def unit_vertex(vertices, vertex):
+        x = vertices[vertex, 0]
+        y = vertices[vertex, 1]
+        z = vertices[vertex, 2]
+        norm = np.sqrt(x * x + y * y + z * z)
+        return x / norm, y / norm, z / norm
+
+    @njit(inline="always")
+    def unit_cell_center(vertices, cells, cell):
+        x = 0.0
+        y = 0.0
+        z = 0.0
+        for slot in range(3):
+            vertex = cells[cell, slot]
+            x += vertices[vertex, 0]
+            y += vertices[vertex, 1]
+            z += vertices[vertex, 2]
+        norm = np.sqrt(x * x + y * y + z * z)
+        return x / norm, y / norm, z / norm
+
+    @njit(parallel=True)
+    def orient(vertices, cells, edges, cell_edges, edge_cells):
+        degenerate_count = 0
+        missing_vertex_count = 0
+        for cell in prange(cells.shape[0]):
+            first_edge = cell_edges[cell, 0]
+            first_vertex = edges[first_edge, 0]
+            second_vertex = edges[first_edge, 1]
+            v0x, v0y, v0z = unit_vertex(vertices, first_vertex)
+            v1x, v1y, v1z = unit_vertex(vertices, second_vertex)
+
+            adjacent_0 = edge_cells[first_edge, 0]
+            adjacent_1 = edge_cells[first_edge, 1]
+            c0x, c0y, c0z = unit_cell_center(vertices, cells, adjacent_0)
+            c1x, c1y, c1z = unit_cell_center(vertices, cells, adjacent_1)
+
+            edge_x = v0x + v1x
+            edge_y = v0y + v1y
+            edge_z = v0z + v1z
+            edge_norm = np.sqrt(
+                edge_x * edge_x + edge_y * edge_y + edge_z * edge_z
+            )
+            edge_x /= edge_norm
+            edge_y /= edge_norm
+            edge_z /= edge_norm
+
+            vertex_dx = v1x - v0x
+            vertex_dy = v1y - v0y
+            vertex_dz = v1z - v0z
+            cell_dx = c1x - c0x
+            cell_dy = c1y - c0y
+            cell_dz = c1z - c0z
+            cross_x = vertex_dy * cell_dz - vertex_dz * cell_dy
+            cross_y = vertex_dz * cell_dx - vertex_dx * cell_dz
+            cross_z = vertex_dx * cell_dy - vertex_dy * cell_dx
+            outward = cross_x * edge_x + cross_y * edge_y + cross_z * edge_z
+            direction_scale = np.sqrt(
+                vertex_dx * vertex_dx
+                + vertex_dy * vertex_dy
+                + vertex_dz * vertex_dz
+            ) * np.sqrt(
+                cell_dx * cell_dx + cell_dy * cell_dy + cell_dz * cell_dz
+            )
+            if (
+                not np.isfinite(outward)
+                or np.abs(outward)
+                <= 64.0 * np.finfo(np.float64).eps * direction_scale
+            ):
+                degenerate_count += 1
+
+            cell_orientation = 1 if adjacent_0 == cell else -1
+            edge_orientation = 1 if outward > 0.0 else -1
+            start_vertex = first_vertex
+            if cell_orientation * edge_orientation > 0:
+                start_vertex = second_vertex
+
+            position = -1
+            for slot in range(3):
+                if cells[cell, slot] == start_vertex:
+                    position = slot
+                    break
+            if position < 0:
+                missing_vertex_count += 1
+            elif position == 1:
+                cell_0 = cells[cell, 0]
+                cells[cell, 0] = cells[cell, 1]
+                cells[cell, 1] = cells[cell, 2]
+                cells[cell, 2] = cell_0
+            elif position == 2:
+                cell_0 = cells[cell, 0]
+                cell_1 = cells[cell, 1]
+                cells[cell, 0] = cells[cell, 2]
+                cells[cell, 1] = cell_0
+                cells[cell, 2] = cell_1
+        return degenerate_count, missing_vertex_count
+
+    return orient
+
+
+@lru_cache(maxsize=1)
+def _compiled_refine_closed_bisection():
+    from numba import njit, prange
+
+    @njit(inline="always")
+    def local_vertex_position(cells, cell_index, vertex):
+        if cells[cell_index, 0] == vertex:
+            return 0
+        if cells[cell_index, 1] == vertex:
+            return 1
+        return 2
+
+    @njit(inline="always")
+    def child_at_vertex(cells, cell_index, vertex):
+        position = local_vertex_position(cells, cell_index, vertex)
+        if position == 0:
+            return 4 * cell_index + 2
+        if position == 1:
+            return 4 * cell_index + 3
+        return 4 * cell_index + 1
+
+    @njit(inline="always")
+    def common_edge_vertex(edge_vertices, first_edge, second_edge):
+        first_0 = edge_vertices[first_edge, 0]
+        first_1 = edge_vertices[first_edge, 1]
+        second_0 = edge_vertices[second_edge, 0]
+        second_1 = edge_vertices[second_edge, 1]
+        if first_0 == second_0 or first_0 == second_1:
+            return first_0
+        return first_1
+
+    @njit(inline="always")
+    def endpoint_slot(edge_vertices, edge_index, vertex):
+        return 0 if edge_vertices[edge_index, 0] == vertex else 1
+
+    @njit(parallel=True)
+    def refine(
+        cells,
+        edge_vertices,
+        cell_edges,
+        edge_cells,
+        old_vertex_count,
+        edge_child_type_from_vertex_0,
+        edge_child_type_from_vertex_1,
+        edge_child_type_in_cell_opposite_vertex_0,
+        edge_child_type_in_cell_opposite_vertex_1,
+        edge_child_type_in_cell_opposite_vertex_2,
+    ):
+        old_edge_count = edge_vertices.shape[0]
+        old_cell_count = cells.shape[0]
+        new_cell_count = old_cell_count * 4
+        new_edge_count = old_edge_count * 2 + old_cell_count * 3
+        inner_edge_offset = old_edge_count * 2
+
+        new_cells = np.empty((new_cell_count, 3), dtype=np.int32)
+        new_cell_edges = np.empty((new_cell_count, 3), dtype=np.int32)
+        new_edges = np.empty((new_edge_count, 2), dtype=np.int32)
+        new_edge_cells = np.empty((new_edge_count, 2), dtype=np.int32)
+        child_parent_edge_index = np.empty(new_edge_count, dtype=np.int32)
+        child_edge_parent_type = np.empty(new_edge_count, dtype=np.int32)
+
+        # Split parent edges. The two adjacent child cells are known from the
+        # parent adjacency, so no global cell-edge incidence sort is needed.
+        for edge_index in prange(old_edge_count):
+            first = edge_vertices[edge_index, 0]
+            second = edge_vertices[edge_index, 1]
+            midpoint = old_vertex_count + edge_index
+            first_split = 2 * edge_index
+            second_split = first_split + 1
+            new_edges[first_split, 0] = first
+            new_edges[first_split, 1] = midpoint
+            new_edges[second_split, 0] = midpoint
+            new_edges[second_split, 1] = second
+
+            first_cell = edge_cells[edge_index, 0]
+            second_cell = edge_cells[edge_index, 1]
+            first_child_a = child_at_vertex(cells, first_cell, first)
+            first_child_b = child_at_vertex(cells, second_cell, first)
+            second_child_a = child_at_vertex(cells, first_cell, second)
+            second_child_b = child_at_vertex(cells, second_cell, second)
+            new_edge_cells[first_split, 0] = min(first_child_a, first_child_b)
+            new_edge_cells[first_split, 1] = max(first_child_a, first_child_b)
+            new_edge_cells[second_split, 0] = min(second_child_a, second_child_b)
+            new_edge_cells[second_split, 1] = max(second_child_a, second_child_b)
+
+            child_parent_edge_index[first_split] = edge_index + 1
+            child_parent_edge_index[second_split] = edge_index + 1
+            child_edge_parent_type[first_split] = edge_child_type_from_vertex_0
+            child_edge_parent_type[second_split] = edge_child_type_from_vertex_1
+
+        # Fill the four child cells and three inner edges of each parent cell.
+        # Parent-cell ranges are disjoint, making this loop race-free.
+        for cell_index in prange(old_cell_count):
+            parent_edge_0 = cell_edges[cell_index, 0]
+            parent_edge_1 = cell_edges[cell_index, 1]
+            parent_edge_2 = cell_edges[cell_index, 2]
+            midpoint_0 = old_vertex_count + parent_edge_0
+            midpoint_1 = old_vertex_count + parent_edge_1
+            midpoint_2 = old_vertex_count + parent_edge_2
+            center_cell = 4 * cell_index
+
+            new_cells[center_cell, 0] = midpoint_0
+            new_cells[center_cell, 1] = midpoint_1
+            new_cells[center_cell, 2] = midpoint_2
+            new_cell_edges[center_cell, 0] = inner_edge_offset + 3 * cell_index
+            new_cell_edges[center_cell, 1] = inner_edge_offset + 3 * cell_index + 1
+            new_cell_edges[center_cell, 2] = inner_edge_offset + 3 * cell_index + 2
+
+            for pair_index in range(3):
+                if pair_index == 0:
+                    first_edge = parent_edge_0
+                    second_edge = parent_edge_1
+                elif pair_index == 1:
+                    first_edge = parent_edge_1
+                    second_edge = parent_edge_2
+                else:
+                    first_edge = parent_edge_2
+                    second_edge = parent_edge_0
+
+                common_vertex = common_edge_vertex(
+                    edge_vertices,
+                    first_edge,
+                    second_edge,
+                )
+                vertex_pos = local_vertex_position(cells, cell_index, common_vertex)
+                child_cell = child_at_vertex(cells, cell_index, common_vertex)
+                first_midpoint = old_vertex_count + first_edge
+                second_midpoint = old_vertex_count + second_edge
+                inner_edge = inner_edge_offset + 3 * cell_index + vertex_pos
+
+                new_cells[child_cell, 0] = first_midpoint
+                new_cells[child_cell, 1] = common_vertex
+                new_cells[child_cell, 2] = second_midpoint
+                new_cell_edges[child_cell, 0] = (
+                    2 * first_edge + endpoint_slot(edge_vertices, first_edge, common_vertex)
+                )
+                new_cell_edges[child_cell, 1] = (
+                    2 * second_edge + endpoint_slot(edge_vertices, second_edge, common_vertex)
+                )
+                new_cell_edges[child_cell, 2] = inner_edge
+                new_edges[inner_edge, 0] = first_midpoint
+                new_edges[inner_edge, 1] = second_midpoint
+                new_edge_cells[inner_edge, 0] = center_cell
+                new_edge_cells[inner_edge, 1] = child_cell
+
+                if vertex_pos == 0:
+                    child_parent_edge_index[inner_edge] = parent_edge_1 + 1
+                    child_edge_parent_type[inner_edge] = (
+                        edge_child_type_in_cell_opposite_vertex_0
+                    )
+                elif vertex_pos == 1:
+                    child_parent_edge_index[inner_edge] = parent_edge_2 + 1
+                    child_edge_parent_type[inner_edge] = (
+                        edge_child_type_in_cell_opposite_vertex_1
+                    )
+                else:
+                    child_parent_edge_index[inner_edge] = parent_edge_0 + 1
+                    child_edge_parent_type[inner_edge] = (
+                        edge_child_type_in_cell_opposite_vertex_2
+                    )
+
+        # Match _edge_vertices_from_cell_edges exactly: orient every edge from
+        # its occurrence in the second (larger) adjacent child cell.
+        for edge_index in prange(new_edge_count):
+            cell_index = new_edge_cells[edge_index, 1]
+            local_position = 0
+            for position in range(3):
+                if new_cell_edges[cell_index, position] == edge_index:
+                    local_position = position
+                    break
+            new_edges[edge_index, 0] = new_cells[cell_index, local_position]
+            new_edges[edge_index, 1] = new_cells[cell_index, (local_position + 1) % 3]
+
+        return (
+            new_cells,
+            new_cell_edges,
+            new_edges,
+            new_edge_cells,
+            child_parent_edge_index,
+            child_edge_parent_type,
+        )
+
+    return refine
 
 
 @lru_cache(maxsize=1)

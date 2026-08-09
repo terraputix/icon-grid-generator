@@ -10,10 +10,12 @@ from .grid_generator import (
     Region,
     TorusGridSpec,
     generate_grid,
+    generate_grid_to_netcdf,
 )
 
 __all__ = [
     "generate_grid",
+    "generate_grid_to_netcdf",
     "IconGrid",
     "IconGridOptions",
     "GlobalGridSpec",

@@ -16,6 +16,7 @@ The root import surface is intentionally small:
 ```python
 from grid_generator import (
     generate_grid,
+    generate_grid_to_netcdf,
     IconGrid,
     IconGridOptions,
     GlobalGridSpec,
@@ -26,6 +27,79 @@ from grid_generator import (
     Region,
 )
 ```
+
+For global grids whose complete in-memory `IconGrid` would exceed available
+memory, use the export-first `generate_grid_to_netcdf` path:
+
+```py
+from grid_generator import generate_grid_to_netcdf
+
+generate_grid_to_netcdf(
+    "R2B12",
+    "icon_grid_R02B12.nc",
+    options={"max_cells": None, "accelerator": "numba"},
+    chunk_size=1_000_000,
+    work_dir="icon-grid-R2B12-work",
+    fields="reduced",
+)
+```
+
+This global-only path keeps compact staged topology, checkpoints completed
+bisection levels, and writes export-only fields in bounded chunks. Publication
+is atomic: the requested output name appears only after the NetCDF file closes
+successfully. High-resolution streaming requires the `accelerate` extra; the
+dependency-free NumPy fallback remains available through `generate_grid` for
+grids that fit in memory.
+
+If `work_dir` is omitted, checkpoints are stored in a hidden directory beside
+the requested output file. For large grids, put the output or an explicit
+`work_dir` on disk-backed scratch storage rather than a memory-backed temporary
+filesystem. Set `resume=False` to ignore existing checkpoints. `chunk_size`
+limits export-only work arrays, but does not partition the compact core topology.
+If writing fails, the requested output is not published; the `.partial` file is
+left in place for diagnosis.
+
+### NetCDF field profiles
+
+Both `grid.to_netcdf(..., fields=...)` and
+`generate_grid_to_netcdf(..., fields=...)` accept the same selector. The
+default remains the existing complete schema.
+
+| Profile | Fields | Audited consumer contract | Approximate R2B12 payload |
+| --- | ---: | --- | ---: |
+| `"full"` | 85 | Existing compatibility/reference output | 1,047.5 GiB |
+| `"reduced"` | 46 | Union required by current ICON and icon4py global-grid readers | 485 GiB |
+| `"icon"` | 38 | Current standard ICON triangular-grid importer | 410 GiB |
+| `"icon4py"` | 26 | Current icon4py spherical `GridManager` | 337.5 GiB |
+
+The reduced and ICON profiles omit the complete Cartesian bundle so ICON uses
+its existing reconstruction fallback; a partial Cartesian bundle is not
+emitted. These contracts cover the audited standard global readers, not every
+ocean, coupling, output-copying, remapping, or institutional tool. Keep
+`"full"` for general exchange.
+
+The current upstream icon4py `GridManager` has smoke-loaded generated
+`"icon4py"` and `"reduced"` files. The ICON set was traced through the complete
+standard importer, including fallbacks and subdivision, but no built ICON
+executable was available for an initialization smoke; it is therefore a
+source-audited contract rather than a claim about every ICON run mode.
+
+Expert callers can pass an iterable of exact variable names instead of a
+profile. Unknown names and non-string members fail before expensive generation,
+duplicates are collapsed, and variables retain the established schema order:
+
+```python
+grid.to_netcdf(
+    "reconstructable_mesh.nc",
+    fields=["vlon", "vlat", "vertex_of_cell"],
+)
+```
+
+Such a custom file is only as compatible as the selected fields. Dimensions
+and global metadata are retained, and dangling `bounds` or `coordinates`
+attributes are removed. Reduced exports also skip avoidable bounds, Cartesian,
+placeholder, hierarchy, and connectivity work for omitted fields rather than
+materializing the complete schema first.
 
 ## Grid Specifications
 
@@ -333,6 +407,7 @@ diffused = diffuse_grid(
 | `R2B9` | 20,971,520 | 31,457,280 | 10,485,762 |
 | `R2B10` | 83,886,080 | 125,829,120 | 41,943,042 |
 | `R2B11` | 335,544,320 | 503,316,480 | 167,772,162 |
+| `R2B12` | 1,342,177,280 | 2,013,265,920 | 671,088,642 |
 
 Each additional global bisection multiplies all leading counts and approximate
 memory work by four. The default `max_cells=2_000_000` rejects larger requests
@@ -340,6 +415,10 @@ before allocation. `max_cells=None` removes that safety cap, but not the signed
 32-bit index limit. See [Performance and Scaling](design.md#performance-and-scaling)
 for measured time, memory, and storage requirements. Large global grids also
 require the optional `accelerate` extra for practical runtime.
+
+R2B12 is the last standard R2 grid whose zero-based and exported one-based
+cell, edge, and vertex identifiers fit in signed 32-bit integers. R2B13 is
+rejected before allocation.
 
 ## Coordinates, Units, and Indexing
 
@@ -371,7 +450,7 @@ Consequences that matter in downstream code:
 
 ## Grid Object
 
-`IconGrid` is the in-memory object returned by all generators. It exposes:
+`IconGrid` is the in-memory object returned by `generate_grid`. It exposes:
 
 - `dims`: cell, edge, and vertex counts.
 - `vertices`, `cells`, `edges`, `cell_edges`, and `edge_cells`: core topology.
@@ -387,7 +466,8 @@ metadata, and unit annotations. Its connectivity indices retain the in-memory
 zero-based convention and boundary sentinel `-1`. Parent-provenance fields are
 already one-based and use `0` for no parent. Index variables expose these
 conventions through `start_index` and `missing_value` attributes.
-`to_netcdf()` performs the ICON-specific one-based connectivity conversion.
+`to_netcdf()` performs the ICON-specific one-based connectivity conversion and
+accepts the field profiles described above.
 
 ```python
 dataset = grid.to_xarray()
@@ -402,10 +482,10 @@ dictionaries; it is not a deep copy. Although `IconGrid` and its option/spec
 dataclasses are frozen, NumPy buffers remain mutable. Treat completed grids as
 immutable values, or copy an array explicitly before modifying it.
 
-`to_netcdf(path)` creates missing parent directories and returns the resulting
-`Path`. Its optional `sphere_radius` argument must match the radius used during
-generation; regenerate with the desired `sphere_radius` rather than relabeling
-already computed metrics during export.
+`to_netcdf(path, fields="full")` creates missing parent directories and returns
+the resulting `Path`. Its optional `sphere_radius` argument must match the
+radius used during generation; regenerate with the desired `sphere_radius`
+rather than relabeling already computed metrics during export.
 
 Grid identity is deterministic: equal canonical specs and options produce the
 same UUID. A limited-area grid, cut, or geometry transform also incorporates its

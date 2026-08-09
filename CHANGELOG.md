@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Add export-first global NetCDF generation with compact staged topology,
+  disk-backed resumable checkpoints, bounded field serialization, and atomic
+  output publication for grids too large to represent as a complete `IconGrid`.
+- Remove the global incidence sort and geometry-sized ordering temporaries from
+  validated staged bisection, and compute spring targets and reusable primal
+  normals with allocation-bounded Numba kernels.
+- Build and write large connectivity tables sequentially so export no longer
+  retains all adjacency tables at once.
+- Treat R2B12 as the final signed-32-bit-addressable global grid and reject the
+  export-first high-resolution path early when Numba acceleration is absent.
+- Scale edge-orientation degeneracy checks by the local direction magnitudes so
+  valid sub-kilometre geometry is not rejected by an absolute tolerance.
+- Add `full`, `reduced`, `icon`, and `icon4py` NetCDF field profiles plus an
+  exact custom-field selector to in-memory and export-first writing.
+- Align global start/end index tables with their refinement-control values so
+  the standard ICON subdivision reader receives one non-empty global interval.
+
 ## 0.5.0 - 2026-08-09
 
 - Accelerate default global-grid generation with deterministic parallel Numba

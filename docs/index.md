@@ -11,6 +11,8 @@ grids without depending on ICON model runtimes or stencil frameworks.
 - Planar torus and open planar triangular grids for local experiments.
 - Limited-area grids extracted from generated global parent grids.
 - ICON-style NetCDF export when the optional `netCDF4` dependency is installed.
+- Export-first global NetCDF generation with resumable disk checkpoints for
+  grids too large to retain as a complete in-memory object.
 - In-memory geometry, topology, connectivity, metric, and refinement arrays for
   plotting, diagnostics, and downstream conversion.
 
@@ -44,6 +46,7 @@ memory, and storage requirements.
 | Goal | Use |
 | --- | --- |
 | Standard spherical grid file | `generate_grid("R2B4")` |
+| Very large global grid file | `generate_grid_to_netcdf("R2B12", ...)` |
 | Raw topology checks | `generate_grid("R2B4", optimize_global=False)` |
 | Periodic planar experiment | `TorusGridSpec(...)` |
 | Regional extract from a global parent | `LimitedAreaGridSpec(...)` |
