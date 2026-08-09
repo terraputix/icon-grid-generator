@@ -36,8 +36,10 @@ For high-resolution global grids, install the optional Numba acceleration path:
 python -m pip install "icon-grid-generator[accelerate,netcdf]"
 ```
 
-Without `accelerate`, `accelerator="auto"` uses the correct NumPy fallback, but
-large-grid runtime is substantially higher. See
+Without `accelerate`, `generate_grid()` with `accelerator="auto"` uses the
+correct NumPy fallback, but large-grid runtime is substantially higher. The
+export-first high-resolution path fails early instead of selecting that
+impractical fallback. See
 [Performance and Scaling](design.md#performance-and-scaling) for measured time,
 memory, and storage requirements.
 

@@ -165,10 +165,10 @@ the update, so callers remain responsible for checking scientific quality.
 
 ## Limitations
 
-- Connectivity and NetCDF index fields use signed 32-bit integer arrays. Global
-  grids up to current large operational scales such as `R02B11` are within that
-  range; generation fails early when cells, edges, or vertices would exceed the
-  int32 index limit.
+- Connectivity and NetCDF index fields use signed 32-bit integer arrays.
+  `R02B12` is the final standard R2 grid within that range; `R02B13` and larger
+  levels fail before allocation because their cell, edge, or vertex identifiers
+  would exceed the int32 index limit.
 - Global bisection parent/provenance fields are tracked structurally during
   refinement. Some defensive fallback paths can still use rounded coordinate
   matching when geometry is constructed outside the normal global pipeline.
@@ -219,29 +219,63 @@ roughly multiplies work and output size by four.
 The optimized measurements below used default staged spring relaxation on an
 exclusive dual-socket AMD EPYC 7713 node with 128 physical cores (256 hardware
 threads) and about 446 GiB of scheduler-visible memory. The software stack was
-Python 3.11, NumPy 2.4.6, Numba 0.66, and 128 Numba threads. These are
-single-run results using the default full 85-field NetCDF profile, not
-service-level guarantees.
+Python 3.11, NumPy 2.4.6, Numba 0.66, netCDF4 1.7.4, and 128 Numba threads.
+Each row is one fresh process with a new profile-specific checkpoint directory.
 
-| Grid | Resolution | Cells | Generation | Serialization/write | Peak RSS | Checkpoints | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R02B08` | 9.86 km | 5,242,880 | 50.6 s | 19.0 s | 1.92 GiB | 0.77 GiB | 4.09 GiB |
-| `R02B09` | 4.93 km | 20,971,520 | 1.42 min | 51.3 s | 6.48 GiB | 3.20 GiB | 16.37 GiB |
-| `R02B10` | 2.47 km | 83,886,080 | 4.09 min | 3.12 min | 23.99 GiB | 12.92 GiB | 65.47 GiB |
-| `R02B11` | 1.23 km | 335,544,320 | 12.52 min | 15.50 min | 94.25 GiB | 51.83 GiB | 261.88 GiB |
+`Generation` includes all checkpoint writes. `NetCDF export` includes
+profile-specific field computation, HDF5 serialization, and file close.
+`Total` is their sum and excludes the separately timed reopen validation.
+Checkpoint and NetCDF columns are logical sizes at completion.
 
-Generation includes resumable checkpoint writes; checkpoint storage is the
-cumulative logical size at completion. R2B11 completed end to end in 28.02
-minutes. Each file was reopened with all 85 variables, exact dimensions, and
-the grid UUID before being removed. File size is stable for this schema, but
-write time depends on shared-filesystem load, striping, page cache, and
-writeback behavior.
+### Full output
 
-The optional `fields="reduced"` profile retains the 46-field union required by
-the audited current ICON and icon4py global-grid readers. Its calculated
-R2B12 payload is about 485 GiB rather than 1,047.5 GiB for `"full"`.
-Consumer-specific `"icon"` and `"icon4py"` profiles are smaller but deliberately
-narrower contracts; see the [NetCDF field profiles](api.md#netcdf-field-profiles).
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 54.8 s | 21.6 s | 76.4 s | 1.94 GiB | 0.77 GiB | 4.09 GiB |
+| `R02B09` | 4.93 km | 20,971,520 | 72.3 s | 46.9 s | 1.99 min | 6.48 GiB | 3.20 GiB | 16.37 GiB |
+| `R02B10` | 2.47 km | 83,886,080 | 3.45 min | 3.69 min | 7.14 min | 24.00 GiB | 12.92 GiB | 65.47 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 11.78 min | 17.49 min | 29.27 min | 93.78 GiB | 51.83 GiB | 261.88 GiB |
+| `R02B12` | 0.616 km | 1,342,177,280 | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+
+### Reduced output
+
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.90 GiB |
+| `R02B09` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min | 6.65 GiB | 3.20 GiB | 7.58 GiB |
+| `R02B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min | 24.44 GiB | 12.92 GiB | 30.31 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.79 GiB | 51.83 GiB | 121.25 GiB |
+| `R02B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
+
+The field profile does not change core topology generation, so differences in
+that column are independent-run variability. Reduced output does avoid
+computing omitted coordinate bounds, connectivity, metrics, Cartesian,
+placeholder, and hierarchy fields. At R2B12 this cut NetCDF export time by 54%,
+total time by 38%, and final storage by 54%. Both R2B12 profiles completed in
+three-hour allocations; reduced completed within the original two-hour target.
+
+### Storage by field profile
+
+These representative cases compare actual uncompressed files. Full and reduced
+come from the fresh runs above; ICON and icon4py reuse an already validated
+checkpoint because only their file payload is being compared.
+
+| Grid | Full | Reduced | ICON | icon4py |
+| --- | ---: | ---: | ---: | ---: |
+| `R02B08` | 4.09 GiB | 1.90 GiB | 1.60 GiB | 1.32 GiB |
+| `R02B10` | 65.47 GiB | 30.31 GiB | 25.63 GiB | 21.09 GiB |
+
+All output directories used the same 8-way, 16 MiB filesystem striping. Every
+headline file was reopened to check exact dimensions, profile-specific variable
+count, UUID, finite positive metrics, and spherical area consistency, then
+deleted with its fresh checkpoints. R2B12 checkpoints grow by less than four
+times from R2B11 because the final addressable grid does not retain parent
+normals for an impossible R2B13 stage.
+
+Logical output size is stable for a schema, but shared-filesystem write time is
+highly dependent on load, striping, page cache, and writeback. These I/O timings
+should therefore be taken with a grain of salt; they are campaign observations,
+not service-level throughput guarantees.
 
 The performance improvement comes from coordinated changes at each lifecycle
 boundary:

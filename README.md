@@ -87,23 +87,52 @@ global grids. Install the `accelerate` extra to enable the measured Numba path;
 Optimized global grids were measured on an exclusive dual-socket AMD EPYC 7713
 node with 128 physical cores (256 hardware threads) and about 446 GiB of
 scheduler-visible memory. Python 3.11, NumPy 2.4.6, Numba 0.66, and 128 Numba
-threads were used. Times are single runs and storage is uncompressed ICON-style
-NetCDF using the default full schema; shared-filesystem write time varies with
-load.
+threads were used. Each row is a fresh end-to-end process. `Generation`
+includes checkpoint writes; `NetCDF export` includes selected-field computation,
+serialization, and close; `Total` is their sum and excludes reopen validation.
 
-| Grid | Cells | Generation | Serialization/write | Peak RSS | Checkpoints | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R2B8` | 5,242,880 | 50.6 s | 19.0 s | 1.92 GiB | 0.77 GiB | 4.09 GiB |
-| `R2B9` | 20,971,520 | 1.42 min | 51.3 s | 6.48 GiB | 3.20 GiB | 16.37 GiB |
-| `R2B10` | 83,886,080 | 4.09 min | 3.12 min | 23.99 GiB | 12.92 GiB | 65.47 GiB |
-| `R2B11` | 335,544,320 | 12.52 min | 15.50 min | 94.25 GiB | 51.83 GiB | 261.88 GiB |
+Full 85-field output:
 
-Generation includes resumable checkpoint writes; checkpoint storage is the
-cumulative logical size at completion. The R2B11 file was reopened with all 85
-variables and its expected UUID, then removed. Install `accelerate`, set
-`max_cells=None`, and leave `accelerator="auto"` or select `"numba"`
-explicitly for this scaling regime. See [Performance and Scaling](https://ofuhrer.github.io/icon-grid-generator/design/#performance-and-scaling)
-for methodology, caveats, and the main remaining bottlenecks.
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R2B8` | 9.86 km | 5,242,880 | 54.8 s | 21.6 s | 76.4 s | 1.94 GiB | 0.77 GiB | 4.09 GiB |
+| `R2B9` | 4.93 km | 20,971,520 | 72.3 s | 46.9 s | 1.99 min | 6.48 GiB | 3.20 GiB | 16.37 GiB |
+| `R2B10` | 2.47 km | 83,886,080 | 3.45 min | 3.69 min | 7.14 min | 24.00 GiB | 12.92 GiB | 65.47 GiB |
+| `R2B11` | 1.23 km | 335,544,320 | 11.78 min | 17.49 min | 29.27 min | 93.78 GiB | 51.83 GiB | 261.88 GiB |
+| `R2B12` | 0.616 km | 1,342,177,280 | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+
+Reduced 46-field output:
+
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R2B8` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.90 GiB |
+| `R2B9` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min | 6.65 GiB | 3.20 GiB | 7.58 GiB |
+| `R2B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min | 24.44 GiB | 12.92 GiB | 30.31 GiB |
+| `R2B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.79 GiB | 51.83 GiB | 121.25 GiB |
+| `R2B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
+
+Actual uncompressed storage for all named profiles on representative grids:
+
+| Grid | Full | Reduced | ICON | icon4py |
+| --- | ---: | ---: | ---: | ---: |
+| `R2B8` | 4.09 GiB | 1.90 GiB | 1.60 GiB | 1.32 GiB |
+| `R2B10` | 65.47 GiB | 30.31 GiB | 25.63 GiB | 21.09 GiB |
+
+The profile does not change core topology generation, so differences in that
+column are independent-run variability. Reduced output saves work by never
+computing omitted derived fields and cut R2B12 export time by 54% and total time
+by 38% in this campaign. R2B12 full and reduced both completed in three-hour
+allocations; reduced finished within the original two-hour target.
+
+Files were uncompressed and used identical 8-way, 16 MiB filesystem striping.
+Each was reopened to check dimensions, field count, UUID, and chunked metric
+values, then deleted along with its fresh checkpoints. Storage is predictable
+for a schema; shared-filesystem I/O time is highly load- and layout-dependent,
+so the export timings should be taken with a grain of salt. Install
+`accelerate`, set `max_cells=None`, and leave `accelerator="auto"` or select
+`"numba"` explicitly for this scaling regime. See
+[Performance and Scaling](https://ofuhrer.github.io/icon-grid-generator/design/#performance-and-scaling)
+for component timings, profile-specific storage, and remaining bottlenecks.
 
 ## Documentation
 

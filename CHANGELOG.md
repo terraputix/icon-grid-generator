@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-09
+
 - Add export-first global NetCDF generation with compact staged topology,
   disk-backed resumable checkpoints, bounded field serialization, and atomic
   output publication for grids too large to represent as a complete `IconGrid`.
@@ -18,6 +20,8 @@
   exact custom-field selector to in-memory and export-first writing.
 - Align global start/end index tables with their refinement-control values so
   the standard ICON subdivision reader receives one non-empty global interval.
+- Document fresh end-to-end `full` and `reduced` scaling measurements through
+  R2B12, profile-specific storage, component timings, and scratch-I/O caveats.
 
 ## 0.5.0 - 2026-08-09
 

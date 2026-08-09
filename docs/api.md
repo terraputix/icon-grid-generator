@@ -47,9 +47,9 @@ generate_grid_to_netcdf(
 This global-only path keeps compact staged topology, checkpoints completed
 bisection levels, and writes export-only fields in bounded chunks. Publication
 is atomic: the requested output name appears only after the NetCDF file closes
-successfully. High-resolution streaming requires the `accelerate` extra; the
-dependency-free NumPy fallback remains available through `generate_grid` for
-grids that fit in memory.
+successfully. High-resolution streaming requires the `accelerate` extra. The
+optional-dependency-free NumPy fallback remains available through
+`generate_grid` for grids that fit in memory.
 
 If `work_dir` is omitted, checkpoints are stored in a hidden directory beside
 the requested output file. For large grids, put the output or an explicit
@@ -623,3 +623,4 @@ The following names are available directly from `grid_generator`:
 - `Region`
 - `TorusGridSpec`
 - `generate_grid`
+- `generate_grid_to_netcdf`
