@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-08-09
+
+- Consolidate API and performance documentation, correct benchmark rounding,
+  and align agent guidance with disk-backed checkpoints.
+
 ## 0.6.0 - 2026-08-09
 
 - Release completed parent and center arrays before constructing child incidence,
@@ -12,7 +17,6 @@
   resumable.
 - Extend the optional performance regression suite to cover optimized spring
   relaxation and end-to-end export-first NetCDF generation.
-
 - Add export-first global NetCDF generation with compact staged topology,
   disk-backed resumable checkpoints, bounded field serialization, and atomic
   output publication for grids too large to represent as a complete `IconGrid`.
