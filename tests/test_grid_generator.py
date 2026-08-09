@@ -538,6 +538,125 @@ def test_bisection_provenance_stores_parent_edge_fields():
     assert np.array_equal(provenance.child_edge_parent_type, computed_edge_type)
 
 
+@pytest.mark.parametrize("parent_name", ["R01B00", "R02B01"])
+def test_sort_free_closed_bisection_matches_general_path(parent_name):
+    pytest.importorskip("numba")
+    parent = generate_grid(
+        parent_name,
+        options={
+            "max_cells": None,
+            "accelerator": "numba",
+            "optimize_global": False,
+        },
+    )
+    expected_vertices, expected_cells, expected = (
+        gg._refine_triangles_bisection_with_provenance(
+            parent.vertices,
+            parent.cells,
+            "numba",
+        )
+    )
+    actual_vertices, actual_cells, actual = (
+        gg._refine_triangles_bisection_with_provenance(
+            parent.vertices,
+            parent.cells,
+            "numba",
+            edge_vertices=parent.edges,
+            cell_edges=parent.cell_edges,
+            edge_cells=parent.edge_cells,
+        )
+    )
+
+    assert np.array_equal(actual_vertices, expected_vertices)
+    assert np.array_equal(actual_cells, expected_cells)
+    for name in (
+        "edges",
+        "cell_edges",
+        "parent_vertex_index",
+        "parent_cell_index",
+        "parent_cell_type",
+        "child_edges",
+        "child_cell_edges",
+        "child_edge_cells",
+        "child_parent_edge_index",
+        "child_edge_parent_type",
+    ):
+        assert np.array_equal(getattr(actual, name), getattr(expected, name)), name
+
+
+def test_compiled_mean_edge_angle_matches_numpy_without_edge_gather_output():
+    pytest.importorskip("numba")
+    grid = generate_grid(
+        "R01B01",
+        options={"accelerator": "numba", "optimize_global": False},
+    )
+    vertices = gg._normalize_rows(grid.vertices)
+    dots = np.sum(
+        vertices[grid.edges[:, 0]] * vertices[grid.edges[:, 1]],
+        axis=1,
+    )
+    expected = float(np.mean(np.arccos(np.clip(dots, -1.0, 1.0))))
+
+    actual = _accelerated.mean_edge_angle_numba(vertices, grid.edges)
+
+    assert actual == pytest.approx(expected, rel=1.0e-14)
+
+
+def test_compiled_primal_normals_match_complete_metric_builder():
+    pytest.importorskip("numba")
+    grid = generate_grid(
+        "R01B01",
+        options={"accelerator": "numba", "optimize_global": False},
+    )
+
+    actual = _accelerated.primal_normals_numba(
+        grid.vertices,
+        grid.cells,
+        grid.edges,
+        grid.edge_cells,
+    )
+
+    assert np.allclose(
+        actual,
+        grid.geometry["edge_primal_normal_cartesian"],
+        rtol=1.0e-14,
+        atol=1.0e-14,
+    )
+
+
+def test_edge_orientation_tolerance_scales_for_sub_kilometre_geometry():
+    pytest.importorskip("numba")
+    delta = 1.0e-5
+    vertices = unit_rows(
+        np.asarray([[1.0, -delta, 0.0], [1.0, delta, 0.0]])
+    )
+    cell_centers = unit_rows(
+        np.asarray([[1.0, 0.0, -delta], [1.0, 0.0, delta]])
+    )
+    edge_centers = unit_rows(vertices.sum(axis=0, keepdims=True))
+    edges = np.asarray([[0, 1]], dtype=np.int32)
+    edge_cells = np.asarray([[0, 1]], dtype=np.int32)
+
+    numpy_orientation = gg._edge_system_orientation(
+        vertices,
+        cell_centers,
+        edges,
+        edge_cells,
+        edge_centers,
+    )
+    compiled_metrics = _accelerated.spherical_edge_metrics_numba(
+        vertices,
+        cell_centers,
+        edges,
+        edge_cells,
+        edge_centers,
+        6_371_229.0,
+    )
+
+    assert np.array_equal(numpy_orientation, np.asarray([1], dtype=np.int32))
+    assert np.array_equal(compiled_metrics[3], numpy_orientation)
+
+
 @pytest.mark.parametrize("grid_name", ["R02B02", "R02B04"])
 def test_staged_global_generation_preserves_connectivity_contract(grid_name):
     grid = generate_grid(grid_name)

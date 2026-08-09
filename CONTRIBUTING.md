@@ -70,7 +70,8 @@ python -m pytest -q
 python -m mkdocs build --strict
 ```
 
-For performance-sensitive grid-generation changes, also run `make perf-check`.
+For performance-sensitive grid-generation changes, install the `accelerate`
+extra and also run `make perf-check`.
 
 For packaging, release, README, or metadata changes, also run:
 

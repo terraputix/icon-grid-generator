@@ -287,25 +287,32 @@ def _validate_iterations(name: str, value: Any) -> None:
 def _spring_relaxed_vertices(grid: Any, opts: _GlobalOptimizationOptions) -> np.ndarray:
     vertices = np.asarray(grid.vertices, dtype=np.float64).copy()
     _normalize_force_rows_inplace(vertices)
-    edges = np.asarray(grid.edges, dtype=np.int64)
+    # Stored grid indices are int32 by contract and NumPy/Numba accept them for
+    # indexing. Avoid doubling the edge table solely for relaxation.
+    edges = np.asarray(grid.edges, dtype=np.int32)
     global_grid = getattr(grid.options, "global_grid", _GlobalGridOptions())
     beta_spring = global_grid.beta_spring
     maxit = opts.iterations
     if maxit == 0:
         return _project_vertices(grid, vertices)
 
-    edge_start = edges[:, 0]
-    edge_end = edges[:, 1]
-    dots = np.sum(vertices[edge_start] * vertices[edge_end], axis=1)
-    mean_edge_length = float(np.mean(np.arccos(np.clip(dots, -1.0, 1.0))))
+    use_numba = _accelerated.should_use_numba(
+        grid.options.accelerator,
+        vertices.shape[0],
+    )
+    if use_numba:
+        mean_edge_length = _accelerated.mean_edge_angle_numba(vertices, edges)
+    else:
+        edge_start = edges[:, 0]
+        edge_end = edges[:, 1]
+        dots = np.sum(vertices[edge_start] * vertices[edge_end], axis=1)
+        mean_edge_length = float(np.mean(np.arccos(np.clip(dots, -1.0, 1.0))))
     len0 = beta_spring * mean_edge_length * 1.164
-    velocity = np.zeros_like(vertices)
     movable = _movable_vertices(grid, global_grid.fixed_boundary)
-    if _accelerated.should_use_numba(grid.options.accelerator, vertices.shape[0]):
-        incident_edges = np.sort(
-            np.asarray(grid.icon_connectivity["v2e"], dtype=np.int32),
-            axis=1,
-        )
+    if use_numba:
+        incident_edges = np.asarray(grid.icon_connectivity["v2e"], dtype=np.int32)
+        if not getattr(grid, "incident_edges_sorted", False):
+            incident_edges = np.sort(incident_edges, axis=1)
         vertices, _ = _accelerated.spring_relaxation_numba(
             vertices,
             edges,
@@ -315,6 +322,7 @@ def _spring_relaxed_vertices(grid: Any, opts: _GlobalOptimizationOptions) -> np.
             maxit,
         )
         return _project_vertices(grid, vertices)
+    velocity = np.zeros_like(vertices)
     all_movable = bool(np.all(movable))
     fixed_vertices = None if all_movable else vertices[~movable].copy()
     max_ekin = 0.0

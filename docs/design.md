@@ -11,33 +11,34 @@ deterministic pipeline:
 5. Build refinement/provenance fields.
 6. Assemble metadata, UUIDs, conversion helpers, and optional NetCDF output.
 
+Very large global grids use an export-first variant: generate a complete base
+through R2B7, refine compact topology stage by stage, checkpoint each completed
+stage on disk, and construct NetCDF-only fields in bounded groups. This path
+returns the output `Path` rather than a complete `IconGrid`.
+
 ## Compatibility Contracts
 
-- Public grid specs and `generate_grid()` are the main API.
-- `IconGrid.dims` and array shapes must remain predictable from the spec.
+- Public grid specs, `generate_grid()`, and global-only
+  `generate_grid_to_netcdf()` are the main generation API.
+- `IconGrid.dims` and array shapes derive deterministically from the spec.
 - Internal topology arrays are zero-based; exported NetCDF index fields are
   one-based where ICON expects that convention.
-- Metadata keys used by UUIDs, NetCDF export, and examples should not drift
-  accidentally.
-- Grid UUIDs must stay stable for unchanged canonical inputs.
+- Metadata and grid UUIDs are stable for unchanged canonical inputs.
 
 ## Feature Boundaries
 
-- The package is Python API first. Keep command wrappers and workflow glue out
-  unless they support an existing public API use case.
+- The package exposes a Python API and does not provide workflow-specific command
+  wrappers.
 - Global, planar, limited-area, optimization, diffusion, diagnostics, and
-  NetCDF export features should share the `IconGrid` data model.
-- `grid_generator.py` is the public facade. Keep large implementation concerns
-  in focused private modules such as `_global.py`, `_netcdf.py`, `_planar.py`,
-  and `_limited_area.py`; preserve thin private aliases only where internal
-  builders/tests still rely on them.
-- Triangular grids are the supported cell family. Add other cell families only
-  with explicit public API, NetCDF, and diagnostic contracts.
-- Ragged planar grids are deterministic Python variants; test structural
-  validity and exported contracts rather than assuming metric identity with
-  regular planar grids.
-- Parent/provenance indices belong in `IconGrid.refinement`; metadata should
-  carry descriptive scalar attributes only.
+  normal NetCDF export share the `IconGrid` data model. Export-first global
+  generation uses a compact private representation.
+- `grid_generator.py` is the public facade; focused private modules contain the
+  spherical, planar, regional, NetCDF, and streaming implementations.
+- Triangles are the only supported cell family.
+- Ragged planar grids are deterministic variants with their own geometry rather
+  than metric-equivalent versions of regular planar grids.
+- Parent/provenance indices live in `IconGrid.refinement`; metadata contains
+  descriptive scalar attributes.
 
 ## Architectural Decisions
 
@@ -83,7 +84,8 @@ deterministic pipeline:
   and `uuidOfParHGrid` records that source. Any payload change is a
   compatibility change.
 - NetCDF export is an internal module boundary. Public users should call
-  `IconGrid.to_netcdf(path)`.
+  `IconGrid.to_netcdf(path)` for in-memory grids or
+  `generate_grid_to_netcdf(...)` for export-first global generation.
 - For compatibility with established ICON grid files, spherical NetCDF
   `edgequad_area` values are normalized by `sphere_radius**2`. The exported
   variable is therefore dimensionless (`units = "1"`) and carries a
@@ -96,12 +98,6 @@ deterministic pipeline:
 - Pipeline stage results use frozen dataclasses to keep builder boundaries
   explicit. Arrays remain mutable NumPy buffers during construction; callers
   should treat completed `IconGrid` objects as immutable values.
-- `grid_generator.py` owns public specs, validation-facing helpers, metadata,
-  UUID payloads, and the `generate_grid()` facade. Large implementation
-  concerns should stay in focused private modules rather than growing the
-  facade again.
-- Performance checks live behind `make perf-check` and are intentionally
-  separate from default CI-style checks because runtime varies with local load.
 
 ## Optimization Algorithms
 
@@ -157,10 +153,10 @@ the update, so callers remain responsible for checking scientific quality.
 
 ## Limitations
 
-- Connectivity and NetCDF index fields use signed 32-bit integer arrays. Global
-  grids up to current large operational scales such as `R02B11` are within that
-  range; generation fails early when cells, edges, or vertices would exceed the
-  int32 index limit.
+- Connectivity and NetCDF index fields use signed 32-bit integer arrays.
+  `R02B12` is the final standard R2 grid within that range; `R02B13` and larger
+  levels fail before allocation because their cell, edge, or vertex identifiers
+  would exceed the int32 index limit.
 - Global bisection parent/provenance fields are tracked structurally during
   refinement. Some defensive fallback paths can still use rounded coordinate
   matching when geometry is constructed outside the normal global pipeline.
@@ -211,66 +207,90 @@ roughly multiplies work and output size by four.
 The optimized measurements below used default staged spring relaxation on an
 exclusive dual-socket AMD EPYC 7713 node with 128 physical cores (256 hardware
 threads) and about 446 GiB of scheduler-visible memory. The software stack was
-Python 3.11, NumPy 2.4.6, Numba 0.66, and 128 Numba threads. These are
-single-run results, not service-level guarantees.
+Python 3.11, NumPy 2.4.6, Numba 0.66, netCDF4 1.7.4, and 128 Numba threads.
+Each row is an independent process with a profile-specific checkpoint directory.
 
-| Grid | Resolution | Cells | Generation | Peak RSS | Retained arrays | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R02B08` | 9.86 km | 5,242,880 | 56.5 s | 4.35 GiB | 3.01 GiB | 4.09 GiB |
-| `R02B09` | 4.93 km | 20,971,520 | 2.02 min | 16.57 GiB | 12.03 GiB | 16.37 GiB |
-| `R02B10` | 2.47 km | 83,886,080 | 6.13 min | 64.85 GiB | 48.13 GiB | ~65.5 GiB |
-| `R02B11` | 1.23 km | 335,544,320 | 37.10 min | 255.87 GiB | 192.50 GiB | 261.88 GiB |
+`Generation` includes all checkpoint writes. `NetCDF export` includes
+profile-specific field computation, HDF5 serialization, and file close.
+`Total` is their sum and excludes the separately timed reopen validation.
+Checkpoint and NetCDF columns are logical sizes at completion.
 
-Generation time excludes NetCDF export. The measured R2B11 export took 8.52
-minutes and peaked at 238.12 GiB, giving a 45.83-minute end-to-end run. The file
-was reopened with all 85 variables, exact dimensions, and the grid UUID before
-being removed. File size is stable for this schema, but write time depends on
-shared-filesystem load, striping, page cache, and writeback behavior.
+### Full output
 
-The performance improvement comes from five coordinated changes:
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 54.8 s | 21.6 s | 76.4 s | 1.94 GiB | 0.77 GiB | 4.09 GiB |
+| `R02B09` | 4.93 km | 20,971,520 | 72.3 s | 46.9 s | 1.99 min | 6.48 GiB | 3.20 GiB | 16.37 GiB |
+| `R02B10` | 2.47 km | 83,886,080 | 3.45 min | 3.69 min | 7.14 min | 24.00 GiB | 12.92 GiB | 65.47 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 11.78 min | 17.49 min | 29.27 min | 93.78 GiB | 51.83 GiB | 261.88 GiB |
+| `R02B12` | 0.616 km | 1,342,177,280 | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+
+### Reduced output
+
+| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.89 GiB |
+| `R02B09` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min | 6.65 GiB | 3.20 GiB | 7.58 GiB |
+| `R02B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min | 24.44 GiB | 12.92 GiB | 30.31 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.78 GiB | 51.83 GiB | 121.25 GiB |
+| `R02B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
+
+The field profile does not change core topology generation, so differences in
+that column are run-to-run variability. Reduced output omits unselected
+coordinate bounds, connectivity, metrics, Cartesian, placeholder, and hierarchy
+computations. At R2B12, reduced output uses 54% less export time, 38% less total
+time, and 54% less final storage than full output.
+
+### Storage by field profile
+
+These representative cases compare measured uncompressed files. Full and
+reduced include complete generation; ICON and icon4py reuse the same generated
+topology because field selection affects export only.
+
+| Grid | Full | Reduced | ICON | icon4py |
+| --- | ---: | ---: | ---: | ---: |
+| `R02B08` | 4.09 GiB | 1.89 GiB | 1.60 GiB | 1.32 GiB |
+| `R02B10` | 65.47 GiB | 30.31 GiB | 25.63 GiB | 21.09 GiB |
+
+All measurements used the same 8-way, 16 MiB filesystem striping. Each full and
+reduced file was reopened to verify dimensions, variable count, UUID, finite
+positive metrics, and spherical area consistency. R2B12 checkpoints grow by
+less than four times from R2B11 because the final addressable grid does not
+retain parent normals for an impossible R2B13 stage.
+
+Logical output size is stable for a schema, but shared-filesystem write time is
+highly dependent on load, striping, page cache, and writeback. These I/O timings
+are representative measurements, not throughput guarantees.
+
+### Scalability mechanisms
+
+Large-grid generation uses:
 
 1. deterministic vertex-owned parallel spring reductions instead of serial
    scatter-heavy NumPy force accumulation;
-2. compiled parallel geometry, metric, topology, connectivity, edge-matching,
-   and orientation kernels;
-3. reuse of staged parent topology and immutable post-relaxation arrays instead
-   of rebuilding or copying them;
-4. early release of compact parent data and temporary arrays; and
-5. incremental NetCDF field construction with each converted field released
-   immediately after writing.
+2. allocation-bounded spring-target and primal-normal kernels that avoid
+   materializing whole-grid vertex gathers or unrelated metric fields;
+3. sort-free closed-grid bisection whose child adjacency is derived directly
+   from validated parent topology;
+4. in-place child-cell orientation, avoiding full cell-center, edge-center, and
+   orientation work arrays during refinement;
+5. compact staged parents containing only refinement topology, vertex
+   incidence, and the primal normals required by the next stage;
+6. immutable disk-backed checkpoint snapshots selected by an atomic manifest
+   update, preserving the preceding stage if an overwrite is interrupted;
+7. export-first NetCDF construction that writes connectivity and derived fields
+   sequentially and releases each table before constructing the next; and
+8. scale-relative orientation checks that remain valid when geometric
+   determinants shrink at sub-kilometre resolution.
 
-Numba remains optional so the base package still depends only on NumPy.
+Numba is optional, so the base package depends only on NumPy.
 `accelerator="auto"` uses Numba for sufficiently large kernels when the
 `accelerate` extra is installed. Without it, generation falls back to the
-correct deterministic NumPy reference path. That fallback is intentionally
-supported but is not performance-equivalent: the original NumPy R2B9 run took
-36.11 minutes rather than 2.02 minutes, and larger optimized grids are not
-practical on it. Install `icon-grid-generator[accelerate]` for high-resolution
-global generation; explicit `accelerator="numba"` fails early if Numba is not
-available.
+correct deterministic NumPy path, which is suitable for modest grids but not
+high-resolution global generation. Explicit `accelerator="numba"` fails if
+Numba is unavailable.
 
-At R2B11, refinement and large-array assembly consume 52.6% of generation and
-spring relaxation consumes 33.8%. The remaining refinement cost is dominated
-by strided gathers, copies, allocation, and memory bandwidth rather than edge
-lookup. A direct R2B12 projection is roughly 770 GiB of retained arrays, about
-1 TiB peak RSS, and about 1 TiB of NetCDF storage, beyond this single-node
-in-memory design. Further scaling therefore needs lower-copy refinement plus a
-partitioned or out-of-core representation, not merely another compiled kernel.
-
-## Testing Expectations
-
-Changes to geometry, topology, metrics, refinement, limited-area extraction, or
-NetCDF output should include tests for the relevant contract:
-
-- expected cell, edge, and vertex counts
-- index bounds and missing-neighbor sentinels
-- finite numeric geometry and positive areas/lengths where applicable
-- parent/provenance index validity
-- exported NetCDF dimensions, variables, and metadata
-
-Use the smallest grid that proves the behavior. Larger grids are useful only for
-representative sanity checks.
-
-Private helper tests may exercise defensive branches for coverage when the
-branch protects a public contract. These tests are regression guards, not
-scientific validation or additional public API.
+The export-first path is global-only and requires Numba above its in-memory base
+stage. `generate_grid()` retains the NumPy path for in-memory work. By default,
+checkpoints live beside the output; large jobs require disk-backed output and
+checkpoint locations rather than a memory-backed temporary filesystem.

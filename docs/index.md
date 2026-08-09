@@ -11,6 +11,8 @@ grids without depending on ICON model runtimes or stencil frameworks.
 - Planar torus and open planar triangular grids for local experiments.
 - Limited-area grids extracted from generated global parent grids.
 - ICON-style NetCDF export when the optional `netCDF4` dependency is installed.
+- Export-first global NetCDF generation with resumable disk checkpoints for
+  grids too large to retain as a complete in-memory object.
 - In-memory geometry, topology, connectivity, metric, and refinement arrays for
   plotting, diagnostics, and downstream conversion.
 
@@ -34,8 +36,10 @@ For high-resolution global grids, install the optional Numba acceleration path:
 python -m pip install "icon-grid-generator[accelerate,netcdf]"
 ```
 
-Without `accelerate`, `accelerator="auto"` uses the correct NumPy fallback, but
-large-grid runtime is substantially higher. See
+Without `accelerate`, `generate_grid()` with `accelerator="auto"` uses the
+correct NumPy fallback, but large-grid runtime is substantially higher. The
+export-first high-resolution path fails early instead of selecting that
+impractical fallback. See
 [Performance and Scaling](design.md#performance-and-scaling) for measured time,
 memory, and storage requirements.
 
@@ -44,6 +48,7 @@ memory, and storage requirements.
 | Goal | Use |
 | --- | --- |
 | Standard spherical grid file | `generate_grid("R2B4")` |
+| Very large global grid file | `generate_grid_to_netcdf("R2B12", ...)` |
 | Raw topology checks | `generate_grid("R2B4", optimize_global=False)` |
 | Periodic planar experiment | `TorusGridSpec(...)` |
 | Regional extract from a global parent | `LimitedAreaGridSpec(...)` |

@@ -42,6 +42,7 @@ def assert_outward_cells(grid):
 def test_public_package_exports_only_supported_grid_api():
     assert grid_generator_package.__all__ == [
         "generate_grid",
+        "generate_grid_to_netcdf",
         "IconGrid",
         "IconGridOptions",
         "GlobalGridSpec",
@@ -490,3 +491,15 @@ def test_safety_cap_fails_clearly_and_can_be_changed_or_disabled():
 def test_global_grid_generation_rejects_int32_index_overflow():
     with pytest.raises(ValueError, match="int32 index limit"):
         generate_grid("R02B13", options={"max_cells": None})
+
+
+def test_r2b12_is_the_last_int32_addressable_global_grid():
+    from grid_generator.grid_generator import GlobalGridSpec, IconGridOptions
+    from grid_generator._validation import validate_grid_options
+
+    spec = GlobalGridSpec(root=2, bisections=12)
+    assert spec.expected_cells == 1_342_177_280
+    assert spec.expected_edges == 2_013_265_920
+    assert spec.expected_vertices == 671_088_642
+    validate_grid_options(spec, IconGridOptions(max_cells=None))
+    assert spec.expected_edges + 1 <= np.iinfo(np.int32).max
