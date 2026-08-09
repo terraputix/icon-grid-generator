@@ -237,6 +237,9 @@ def write_icon_grid(
             variable[:] = data
             for attr_name, attr_value in attrs.items():
                 variable.setncattr(attr_name, attr_value)
+            # Release generated field storage before advancing the iterator;
+            # the next field can itself be an edge-by-four bounds array.
+            del data
 
     return path
 
