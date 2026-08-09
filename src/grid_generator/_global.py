@@ -91,8 +91,14 @@ def _generate_staged_global_grid(
     )
     vertices = vertices * options.radius
     geometry = _geometry_from_vertices(spec, options, vertices, cells, provenance)
-    grid = _assemble_global_grid(spec, options, geometry, context)
     stage_iterations = _stage_global_optimization_iterations(options, parent)
+    grid = _assemble_global_grid(
+        spec,
+        options,
+        geometry,
+        context,
+        build_metrics=stage_iterations == 0,
+    )
     if stage_iterations == 0:
         _evict_staged_parent_cache(context, parent_spec, spec)
         return grid
@@ -157,6 +163,8 @@ def _assemble_global_grid(
     options: Any,
     geometry: GeometryData,
     context: _GlobalGenerationContext,
+    *,
+    build_metrics: bool = True,
 ) -> Any:
     topology = GlobalTopologyBuilder().build(spec, options, geometry)
     topology = _adjust_global_edge_orientation(
@@ -166,9 +174,14 @@ def _assemble_global_grid(
         topology,
         context,
     )
-    metrics = SphericalMetricsBuilder().build(options, geometry, topology)
+    metrics = (
+        SphericalMetricsBuilder().build(options, geometry, topology)
+        if build_metrics
+        else None
+    )
     refinement = GlobalRefinementBuilder(context).build(spec, options, geometry, topology)
-    metadata = _gg()._metadata(spec, options, metrics.fields)
+    metric_fields = {} if metrics is None else metrics.fields
+    metadata = _gg()._metadata(spec, options, metric_fields)
 
     grid = _gg().IconGrid(
         spec=spec,
@@ -191,7 +204,7 @@ def _assemble_global_grid(
         icon_connectivity=topology.icon_connectivity,
         connectivity=topology.connectivity,
         neighbor_tables=topology.neighbor_tables,
-        geometry=metrics.fields,
+        geometry=metric_fields,
         refinement=refinement.fields,
         metadata=metadata,
     )

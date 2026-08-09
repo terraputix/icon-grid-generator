@@ -124,6 +124,149 @@ def fill_bisection_children_numba(
     )
 
 
+def spring_relaxation_numba(
+    vertices: np.ndarray,
+    edges: np.ndarray,
+    incident_edges: np.ndarray,
+    movable: np.ndarray,
+    target_length: float,
+    iterations: int,
+) -> tuple[np.ndarray, int]:
+    """Run deterministic vertex-parallel global spring relaxation.
+
+    ``incident_edges`` contains one-based edge indices sorted by edge number.
+    Each vertex owns its force reduction, avoiding the conflicting scatter in
+    ``np.add.at`` while retaining the reference algorithm's contribution order.
+    """
+    return _compiled_spring_relaxation()(
+        vertices,
+        edges,
+        incident_edges,
+        movable,
+        target_length,
+        iterations,
+    )
+
+
+@lru_cache(maxsize=1)
+def _compiled_spring_relaxation():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def relax(vertices, edges, incident_edges, movable, len0, maxit):
+        velocity = np.zeros_like(vertices)
+        spring = np.zeros_like(vertices)
+        fixed_vertices = vertices.copy()
+        inv_sqrt2 = 1.0 / np.sqrt(2.0)
+        epsilon = np.finfo(np.float64).eps
+        max_ekin = 0.0
+        max_test = 0.0
+        completed_iterations = 0
+
+        for iteration in range(1, maxit + 1):
+            if iteration <= 50:
+                dt = 1.6e-2
+            elif iteration <= 150:
+                dt = 1.6e-2 * (1.0 + 0.04 * (iteration - 50))
+            else:
+                dt = 8.0e-2
+
+            # Match the two np.add.at passes in the NumPy implementation:
+            # all edge-start contributions first, then all edge-end ones.
+            for vertex in prange(vertices.shape[0]):
+                sx = 0.0
+                sy = 0.0
+                sz = 0.0
+                if movable[vertex]:
+                    for endpoint in range(2):
+                        for slot in range(incident_edges.shape[1]):
+                            edge_index = incident_edges[vertex, slot] - 1
+                            if edge_index < 0 or edges[edge_index, endpoint] != vertex:
+                                continue
+                            start = edges[edge_index, 0]
+                            end = edges[edge_index, 1]
+                            dx = vertices[end, 0] - vertices[start, 0]
+                            dy = vertices[end, 1] - vertices[start, 1]
+                            dz = vertices[end, 2] - vertices[start, 2]
+                            dot = (
+                                vertices[start, 0] * dx
+                                + vertices[start, 1] * dy
+                                + vertices[start, 2] * dz
+                                + 1.0
+                            )
+                            if dot < -1.0:
+                                dot = -1.0
+                            elif dot > 1.0:
+                                dot = 1.0
+                            denominator = 1.0 - dot
+                            if denominator < epsilon:
+                                denominator = epsilon
+                            scale = (np.arccos(dot) - len0) / np.sqrt(denominator)
+                            sign = 1.0 if endpoint == 0 else -1.0
+                            sx += sign * dx * scale
+                            sy += sign * dy * scale
+                            sz += sign * dz * scale
+                    spring[vertex, 0] = sx * inv_sqrt2
+                    spring[vertex, 1] = sy * inv_sqrt2
+                    spring[vertex, 2] = sz * inv_sqrt2
+                else:
+                    spring[vertex, 0] = 0.0
+                    spring[vertex, 1] = 0.0
+                    spring[vertex, 2] = 0.0
+
+            ekin = 0.0
+            test = 0.0
+            for vertex in prange(vertices.shape[0]):
+                if movable[vertex]:
+                    x = vertices[vertex, 0] + dt * velocity[vertex, 0]
+                    y = vertices[vertex, 1] + dt * velocity[vertex, 1]
+                    z = vertices[vertex, 2] + dt * velocity[vertex, 2]
+                    norm = np.sqrt(x * x + y * y + z * z)
+                    x /= norm
+                    y /= norm
+                    z /= norm
+                    vertices[vertex, 0] = x
+                    vertices[vertex, 1] = y
+                    vertices[vertex, 2] = z
+
+                    vx = (1.0 - dt) * velocity[vertex, 0] + dt * spring[vertex, 0]
+                    vy = (1.0 - dt) * velocity[vertex, 1] + dt * spring[vertex, 1]
+                    vz = (1.0 - dt) * velocity[vertex, 2] + dt * spring[vertex, 2]
+                    radial = vx * x + vy * y + vz * z
+                    vx -= radial * x
+                    vy -= radial * y
+                    vz -= radial * z
+                    velocity[vertex, 0] = vx
+                    velocity[vertex, 1] = vy
+                    velocity[vertex, 2] = vz
+                    ekin += 0.5 * (vx * vx + vy * vy + vz * vz)
+                    test += (
+                        spring[vertex, 0] * spring[vertex, 0]
+                        + spring[vertex, 1] * spring[vertex, 1]
+                        + spring[vertex, 2] * spring[vertex, 2]
+                    )
+                else:
+                    vertices[vertex, 0] = fixed_vertices[vertex, 0]
+                    vertices[vertex, 1] = fixed_vertices[vertex, 1]
+                    vertices[vertex, 2] = fixed_vertices[vertex, 2]
+                    velocity[vertex, 0] = 0.0
+                    velocity[vertex, 1] = 0.0
+                    velocity[vertex, 2] = 0.0
+
+            completed_iterations = iteration
+            if ekin > max_ekin:
+                max_ekin = ekin
+            if test > max_test:
+                max_test = test
+            if iteration > 5 and test == max_test and max_test > 0.0:
+                break
+            if iteration > 5 and max_ekin > 0.0 and ekin < 0.001 * max_ekin:
+                break
+        return vertices, completed_iterations
+
+    return relax
+
+
 @lru_cache(maxsize=1)
 def _compiled_order_cells_by_edges():
     from numba import njit

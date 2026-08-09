@@ -382,6 +382,25 @@ def test_default_global_generation_uses_staged_spring_relaxation(grid_name, opti
     assert grid.metadata["global_optimization"] == "spring"
 
 
+def test_staged_spring_relaxation_skips_discarded_pre_relaxation_metrics(monkeypatch):
+    calls = 0
+    original = SphericalMetricsBuilder.build
+
+    def counted_build(self, options, geometry, topology):
+        nonlocal calls
+        calls += 1
+        return original(self, options, geometry, topology)
+
+    monkeypatch.setattr(SphericalMetricsBuilder, "build", counted_build)
+    grid = generate_grid("R02B02", max_cells=None, spring_iterations=1)
+
+    # The unrefined root needs metrics. Refined stages build their final metrics
+    # only after relaxation, through the rebuild path.
+    assert calls == 1
+    assert grid.geometry["cell_area"].shape == (grid.dims["cell"],)
+    assert np.all(np.isfinite(grid.geometry["cell_area"]))
+
+
 def test_raw_global_generation_bypasses_staged_spring_relaxation():
     raw = generate_grid("R02B02", options={"optimize_global": False})
     relaxed = generate_grid("R02B02")
@@ -604,9 +623,13 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available():
 
     numpy_grid = generate_grid("R02B02", options={"accelerator": "numpy"})
     numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
+    repeated_numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
 
     assert np.array_equal(numba_grid.cells, numpy_grid.cells)
     assert np.array_equal(numba_grid.edges, numpy_grid.edges)
+    assert np.array_equal(numba_grid.vertices, repeated_numba_grid.vertices)
+    assert np.array_equal(numba_grid.cell_center_xyz, repeated_numba_grid.cell_center_xyz)
+    assert numba_grid.metadata["uuidOfHGrid"] == numpy_grid.metadata["uuidOfHGrid"]
     assert np.array_equal(
         numba_grid.refinement["parent_cell_type"],
         numpy_grid.refinement["parent_cell_type"],
@@ -614,6 +637,19 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available():
     assert np.array_equal(
         numba_grid.refinement["edge_parent_type"],
         numpy_grid.refinement["edge_parent_type"],
+    )
+    assert np.allclose(numba_grid.vertices, numpy_grid.vertices, rtol=1e-12, atol=1e-14)
+    for name in ("cell_area", "dual_area", "edge_length", "dual_edge_length"):
+        assert np.allclose(
+            numba_grid.geometry[name],
+            numpy_grid.geometry[name],
+            rtol=2e-10,
+            atol=1e-8,
+        )
+    assert np.isclose(
+        numba_grid.geometry["cell_area"].sum(),
+        4.0 * np.pi * numba_grid.options.sphere_radius**2,
+        rtol=2e-10,
     )
 
 

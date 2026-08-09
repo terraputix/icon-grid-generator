@@ -9,6 +9,7 @@ import uuid
 
 import numpy as np
 
+from . import _accelerated
 from ._validation import finite_float_option
 
 
@@ -290,6 +291,20 @@ def _spring_relaxed_vertices(grid: Any, opts: _GlobalOptimizationOptions) -> np.
     len0 = beta_spring * mean_edge_length * 1.164
     velocity = np.zeros_like(vertices)
     movable = _movable_vertices(grid, global_grid.fixed_boundary)
+    if _accelerated.should_use_numba(grid.options.accelerator, vertices.shape[0]):
+        incident_edges = np.sort(
+            np.asarray(grid.icon_connectivity["v2e"], dtype=np.int32),
+            axis=1,
+        )
+        vertices, _ = _accelerated.spring_relaxation_numba(
+            vertices,
+            edges,
+            incident_edges,
+            movable,
+            len0,
+            maxit,
+        )
+        return _project_vertices(grid, vertices)
     all_movable = bool(np.all(movable))
     fixed_vertices = None if all_movable else vertices[~movable].copy()
     max_ekin = 0.0
