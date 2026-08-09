@@ -140,7 +140,11 @@ Advanced options:
 
 - `accelerator`: `"auto"`, `"numpy"`, or `"numba"`. `"auto"` uses NumPy for
   smaller work and uses Numba for selected larger kernels when it is installed;
-  explicit `"numba"` raises if the `accelerate` extra is unavailable.
+  explicit `"numba"` raises if the `accelerate` extra is unavailable. Without
+  Numba, `"auto"` falls back to the correct deterministic NumPy implementation,
+  but that fallback is not performance-equivalent and is not practical for
+  high-resolution global grids. Install `icon-grid-generator[accelerate]` for
+  the measured large-grid performance.
 - `spring_beta` and `spring_iterations`: global spring relaxation controls.
 - `indexing`: accepts `"new"` or `"old"`. It is currently compatibility
   metadata and part of grid identity; both values use the same deterministic
@@ -325,12 +329,17 @@ diffused = diffuse_grid(
 | `R2B3` | 5,120 | 7,680 | 2,562 |
 | `R2B4` | 20,480 | 30,720 | 10,242 |
 | `R2B6` | 327,680 | 491,520 | 163,842 |
+| `R2B8` | 5,242,880 | 7,864,320 | 2,621,442 |
+| `R2B9` | 20,971,520 | 31,457,280 | 10,485,762 |
+| `R2B10` | 83,886,080 | 125,829,120 | 41,943,042 |
+| `R2B11` | 335,544,320 | 503,316,480 | 167,772,162 |
 
 Each additional global bisection multiplies all leading counts and approximate
 memory work by four. The default `max_cells=2_000_000` rejects larger requests
 before allocation. `max_cells=None` removes that safety cap, but not the signed
 32-bit index limit. See [Performance and Scaling](design.md#performance-and-scaling)
-for measured, hardware-specific estimates.
+for measured time, memory, and storage requirements. Large global grids also
+require the optional `accelerate` extra for practical runtime.
 
 ## Coordinates, Units, and Indexing
 

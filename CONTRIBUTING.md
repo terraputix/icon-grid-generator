@@ -54,10 +54,10 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[test,docs]"
 ```
 
-Optional extras are available for NetCDF and xarray workflows:
+Optional extras are available for accelerated, NetCDF, and xarray workflows:
 
 ```bash
-python -m pip install -e ".[netcdf,xarray]"
+python -m pip install -e ".[accelerate,netcdf,xarray]"
 ```
 
 ## Local Checks
@@ -69,6 +69,8 @@ python -m ruff check .
 python -m pytest -q
 python -m mkdocs build --strict
 ```
+
+For performance-sensitive grid-generation changes, also run `make perf-check`.
 
 For packaging, release, README, or metadata changes, also run:
 

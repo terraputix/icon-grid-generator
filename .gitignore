@@ -9,6 +9,7 @@ dist/
 build/
 site/
 tmp/
+profiling/
 
 # Local agent/editor tooling
 .claude/

@@ -35,6 +35,13 @@ PYTHON_CLASSIFIER_RE = re.compile(
     r'"Programming Language :: Python :: (3\.\d+)"'
 )
 MARKDOWN_SVG_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+\.svg)\)")
+PROJECT_VERSION_RE = re.compile(r'^version = "([^"]+)"$', re.MULTILINE)
+CITATION_VERSION_RE = re.compile(r'^version: "([^"]+)"$', re.MULTILINE)
+CITATION_DATE_RE = re.compile(r'^date-released: "([^"]+)"$', re.MULTILINE)
+CHANGELOG_RELEASE_RE = re.compile(
+    r"^## (\d+\.\d+\.\d+) - (\d{4}-\d{2}-\d{2})$",
+    re.MULTILINE,
+)
 
 EXPECTED_NETCDF_DIMS = {
     "cell": 20,
@@ -227,6 +234,25 @@ def test_readme_python_badge_matches_test_workflow_matrix():
         key=lambda version: tuple(int(part) for part in version.split(".")),
     )
     assert classifier_versions == matrix_versions
+
+
+def test_release_metadata_matches_latest_changelog_entry():
+    pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text()
+    citation_text = (PROJECT_ROOT / "CITATION.cff").read_text()
+    changelog_text = (PROJECT_ROOT / "CHANGELOG.md").read_text()
+
+    project_version = PROJECT_VERSION_RE.search(pyproject_text)
+    citation_version = CITATION_VERSION_RE.search(citation_text)
+    citation_date = CITATION_DATE_RE.search(citation_text)
+    changelog_release = CHANGELOG_RELEASE_RE.search(changelog_text)
+
+    assert project_version is not None
+    assert citation_version is not None
+    assert citation_date is not None
+    assert changelog_release is not None
+    assert project_version.group(1) == citation_version.group(1)
+    assert project_version.group(1) == changelog_release.group(1)
+    assert citation_date.group(1) == changelog_release.group(2)
 
 
 @pytest.mark.parametrize(

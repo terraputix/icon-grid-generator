@@ -28,6 +28,17 @@ grid.to_netcdf("icon_grid_R02B04.nc")
 Global grids are optimized by default. Pass `optimize_global=False` only for raw
 topology diagnostics.
 
+For high-resolution global grids, install the optional Numba acceleration path:
+
+```bash
+python -m pip install "icon-grid-generator[accelerate,netcdf]"
+```
+
+Without `accelerate`, `accelerator="auto"` uses the correct NumPy fallback, but
+large-grid runtime is substantially higher. See
+[Performance and Scaling](design.md#performance-and-scaling) for measured time,
+memory, and storage requirements.
+
 ## Which Grid Should I Use?
 
 | Goal | Use |
@@ -45,6 +56,7 @@ topology diagnostics.
 - [Coordinates, units, and indexing](api.md#coordinates-units-and-indexing)
 - [Regional cutting semantics](api.md#cutting)
 - [Grid optimization guide](api.md#grid-optimization)
+- [Performance and scaling](design.md#performance-and-scaling)
 - [Design notes and limitations](design.md)
 - [Changelog](https://github.com/ofuhrer/icon-grid-generator/blob/main/CHANGELOG.md)
 - [Citation metadata](https://github.com/ofuhrer/icon-grid-generator/blob/main/CITATION.cff)

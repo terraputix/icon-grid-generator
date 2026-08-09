@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-09
+
+- Accelerate default global-grid generation with deterministic parallel Numba
+  kernels for staged spring relaxation, spherical geometry and metrics,
+  topology/connectivity construction, edge matching, and orientation updates.
+- Reuse staged parent topology, compact and release parent data earlier, and
+  reuse immutable topology during post-relaxation rebuilds to avoid large
+  serial hash-map work and unnecessary copies.
+- Stream ICON NetCDF field assembly and release each converted field after it is
+  written, keeping export memory below the generation peak on large grids.
+- Preserve the NumPy-only execution path as a correct reference and
+  fallback; document that the optional `accelerate` extra is required for the
+  measured high-resolution performance.
+- Add deterministic accelerator-equivalence, topology-reuse, degenerate-edge,
+  writer-lifetime, and performance regression coverage.
+- Document single-node optimized performance through R2B11, including runtime,
+  peak and retained memory, NetCDF storage, hardware context, and the remaining
+  refinement/memory-bandwidth scalability limit.
+
 ## 0.4.1 - 2026-08-05
 
 - Streamline the README to the essential project description, quick start,

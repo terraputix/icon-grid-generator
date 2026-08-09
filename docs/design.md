@@ -208,43 +208,54 @@ therefore all expected to scale approximately as `O(n^2 * 4^k)` for
 sufficiently large global grids. Equivalently, each additional bisection level
 roughly multiplies work and output size by four.
 
-The measured single-process generation-time model below is calibrated for raw
-global generation with `optimize_global=False`. Default optimized global
-generation has the same asymptotic grid-size scaling, but its runtime constant
-depends on the spring-relaxation settings and is not represented by this model.
+The optimized measurements below used default staged spring relaxation on an
+exclusive dual-socket AMD EPYC 7713 node with 128 physical cores (256 hardware
+threads) and about 446 GiB of scheduler-visible memory. The software stack was
+Python 3.11, NumPy 2.4.6, Numba 0.66, and 128 Numba threads. These are
+single-run results, not service-level guarantees.
 
-```text
-generation_seconds ~= 9.5e-5 * f^2
-                   ~= 4.8e-6 * cells
-```
+| Grid | Resolution | Cells | Generation | Peak RSS | Retained arrays | NetCDF storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 56.5 s | 4.35 GiB | 3.01 GiB | 4.09 GiB |
+| `R02B09` | 4.93 km | 20,971,520 | 2.02 min | 16.57 GiB | 12.03 GiB | 16.37 GiB |
+| `R02B10` | 2.47 km | 83,886,080 | 6.13 min | 64.85 GiB | 48.13 GiB | ~65.5 GiB |
+| `R02B11` | 1.23 km | 335,544,320 | 37.10 min | 255.87 GiB | 192.50 GiB | 261.88 GiB |
 
-Peak memory is less exact because it includes temporary arrays, Python/NumPy
-allocator behavior, and whether NetCDF export is running. For large measured
-global grids, generation peak RSS was roughly:
+Generation time excludes NetCDF export. The measured R2B11 export took 8.52
+minutes and peaked at 238.12 GiB, giving a 45.83-minute end-to-end run. The file
+was reopened with all 85 variables, exact dimensions, and the grid UUID before
+being removed. File size is stable for this schema, but write time depends on
+shared-filesystem load, striping, page cache, and writeback behavior.
 
-```text
-peak_generation_rss_gb ~= (2.5e-5 to 3.6e-5) * f^2
-                       ~= (1.3e-6 to 1.8e-6) * cells
-```
+The performance improvement comes from five coordinated changes:
 
-NetCDF file size is the most predictable of the three:
+1. deterministic vertex-owned parallel spring reductions instead of serial
+   scatter-heavy NumPy force accumulation;
+2. compiled parallel geometry, metric, topology, connectivity, edge-matching,
+   and orientation kernels;
+3. reuse of staged parent topology and immutable post-relaxation arrays instead
+   of rebuilding or copying them;
+4. early release of compact parent data and temporary arrays; and
+5. incremental NetCDF field construction with each converted field released
+   immediately after writing.
 
-```text
-netcdf_size_mb ~= 0.0168 * f^2
-               ~= 0.000838 * cells
-```
+Numba remains optional so the base package still depends only on NumPy.
+`accelerator="auto"` uses Numba for sufficiently large kernels when the
+`accelerate` extra is installed. Without it, generation falls back to the
+correct deterministic NumPy reference path. That fallback is intentionally
+supported but is not performance-equivalent: the original NumPy R2B9 run took
+36.11 minutes rather than 2.02 minutes, and larger optimized grids are not
+practical on it. Install `icon-grid-generator[accelerate]` for high-resolution
+global generation; explicit `accelerator="numba"` fails early if Numba is not
+available.
 
-These constants were calibrated on an Apple M1 laptop with 16 GB RAM, macOS
-26.5.1, and Python 3.11.11. Generation timings exclude NetCDF export; file size
-is for the standard ICON-style NetCDF output. Treat runtime and memory constants
-as hardware-specific estimates, not guarantees. The asymptotic `n^2 * 4^k`
-scaling is the portable part of the model.
-
-| Grid | `f` | Cells | Generation | Peak RSS | NetCDF size |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `R02B06` | 128 | 327,680 | 1.55 s | 0.58 GB | 275 MB |
-| `R02B07` | 256 | 1,310,720 | 5.98 s | 2.34 GB | 1.1 GB |
-| `R02B08` | 512 | 5,242,880 | 25.34 s | 6.57 GB | 4.4 GB |
+At R2B11, refinement and large-array assembly consume 52.6% of generation and
+spring relaxation consumes 33.8%. The remaining refinement cost is dominated
+by strided gathers, copies, allocation, and memory bandwidth rather than edge
+lookup. A direct R2B12 projection is roughly 770 GiB of retained arrays, about
+1 TiB peak RSS, and about 1 TiB of NetCDF storage, beyond this single-node
+in-memory design. Further scaling therefore needs lower-copy refinement plus a
+partitioned or out-of-core representation, not merely another compiled kernel.
 
 ## Testing Expectations
 
