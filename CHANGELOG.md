@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-08-09
+
 - Make accelerated spring reductions deterministic across Numba thread counts
   through production-default convergence, preserving byte-identical geometry
   for one grid identity.
