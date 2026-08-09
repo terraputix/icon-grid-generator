@@ -772,6 +772,11 @@ def test_fused_global_orientation_rejects_degenerate_edges(monkeypatch):
         geometry,
     )
     topology = GlobalTopologyBuilder().build(spec, options, geometry)
+    gg._generate_grid(
+        GlobalGridSpec(root=spec.root, bisections=spec.bisections - 1),
+        options,
+        context,
+    )
 
     monkeypatch.setattr(_accelerated, "should_use_numba_large", lambda *_: True)
     monkeypatch.setattr(
