@@ -1473,7 +1473,32 @@ def _refine_triangles_bisection_with_provenance(
     accelerator: str = "auto",
 ) -> tuple[np.ndarray, np.ndarray, BisectionProvenance]:
     """Split triangles into ICON-ordered bisection children and provenance."""
-    edge_vertices, cell_edges, _ = _build_edges(cells)
+    use_compiled_fill = _accelerated.should_use_numba_ordering(
+        accelerator,
+        cells.shape[0] * 4,
+    )
+    use_compiled_edge_build = (
+        use_compiled_fill
+        and cells.shape[0] * 4 >= _accelerated.AUTO_NUMBA_MIN_ORDER_CELLS
+    )
+    if use_compiled_edge_build:
+        (
+            edge_vertices,
+            cell_edges,
+            _,
+            failure_index,
+            failure_kind,
+        ) = _accelerated.build_closed_edges_numba(cells)
+        if failure_kind == 1:
+            raise RuntimeError("generated more edges than a closed triangular grid permits")
+        if failure_kind == 2:
+            raise RuntimeError(f"edge {failure_index} has more than two adjacent cells")
+        if failure_kind == 3:
+            raise RuntimeError(
+                f"edge {failure_index} has 1 adjacent cells, expected 2"
+            )
+    else:
+        edge_vertices, cell_edges, _ = _build_edges(cells)
     old_vertex_count = vertices.shape[0]
     old_edge_count = edge_vertices.shape[0]
     old_cell_count = cells.shape[0]
@@ -1497,7 +1522,6 @@ def _refine_triangles_bisection_with_provenance(
         + np.array([0, 1, 2], dtype=np.int32)
     )
 
-    use_compiled_fill = _accelerated.should_use_numba_ordering(accelerator, new_cell_count)
     if use_compiled_fill:
         (
             new_cells,
@@ -1752,8 +1776,13 @@ def _order_cells_by_edges(
     edge_cells: np.ndarray,
     accelerator: str = "auto",
 ) -> tuple[np.ndarray, np.ndarray]:
-    cell_centers = _cell_centers(vertices, cells, 1.0)
-    edge_centers = _edge_centers(vertices, edges, 1.0)
+    center_accelerator = (
+        accelerator
+        if cells.shape[0] >= _accelerated.AUTO_NUMBA_MIN_LOOKUP_ROWS
+        else "numpy"
+    )
+    cell_centers = _cell_centers(vertices, cells, 1.0, center_accelerator)
+    edge_centers = _edge_centers(vertices, edges, 1.0, center_accelerator)
     edge_system_orientation = _edge_system_orientation(
         vertices,
         cell_centers,
@@ -1835,7 +1864,14 @@ def _lon_lat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lon, lat
 
 
-def _cell_centers(vertices: np.ndarray, cells: np.ndarray, radius: float) -> np.ndarray:
+def _cell_centers(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    radius: float,
+    accelerator: str = "numpy",
+) -> np.ndarray:
+    if _accelerated.should_use_numba_large(accelerator, cells.shape[0]):
+        return _accelerated.cell_centers_numba(vertices, cells, radius)
     unit_vertices = _normalize_rows(vertices)
     triangles = unit_vertices[cells]
     centers = np.cross(
@@ -1932,7 +1968,21 @@ def _fixed_incidence(
     values: np.ndarray,
     row_count: int,
     width: int,
+    accelerator: str = "numpy",
 ) -> np.ndarray:
+    if _accelerated.should_use_numba_large(accelerator, owners.shape[0]):
+        incidence, oversized_owner, oversized_count = _accelerated.fixed_incidence_numba(
+            owners,
+            values,
+            row_count,
+            width,
+        )
+        if oversized_owner >= 0:
+            raise RuntimeError(
+                f"vertex {oversized_owner} has {oversized_count} incident "
+                f"items, expected at most {width}"
+            )
+        return incidence
     counts = np.bincount(owners, minlength=row_count)
     oversized = np.flatnonzero(counts > width)
     if oversized.size:
@@ -1955,7 +2005,16 @@ def _sort_fixed_around_vertices(
     ids: np.ndarray,
     *,
     points: np.ndarray | None = None,
+    accelerator: str = "numpy",
 ) -> np.ndarray:
+    if _accelerated.should_use_numba_large(accelerator, vertices.shape[0]):
+        if points is None:
+            points = _normalize_rows(vertices)
+        return _accelerated.sort_fixed_around_vertices_numba(
+            vertices,
+            ids,
+            points,
+        )
     if points is None:
         points = _normalize_rows(vertices)
     origins = _normalize_rows(vertices)
@@ -2002,6 +2061,7 @@ def _icon_connectivity(
     edges: np.ndarray,
     cell_edges: np.ndarray,
     edge_cells: np.ndarray,
+    accelerator: str = "numpy",
 ) -> dict[str, np.ndarray]:
     n_vertices = vertices.shape[0]
     c2e = np.asarray(cell_edges, dtype=np.int32)
@@ -2027,22 +2087,43 @@ def _icon_connectivity(
         copy=False,
     )
 
-    edge_centers = _edge_centers(vertices, edges, 1.0)
+    edge_centers = _edge_centers(vertices, edges, 1.0, accelerator)
     unit_centers = _normalize_rows(cell_center_xyz)
 
     v2v = _sort_fixed_around_vertices(
         vertices,
-        _fixed_incidence(edge_owners, incident_vertices, n_vertices, 6),
+        _fixed_incidence(
+            edge_owners,
+            incident_vertices,
+            n_vertices,
+            6,
+            accelerator,
+        ),
+        accelerator=accelerator,
     )
     v2e = _sort_fixed_around_vertices(
         vertices,
-        _fixed_incidence(edge_owners, incident_edges, n_vertices, 6),
+        _fixed_incidence(
+            edge_owners,
+            incident_edges,
+            n_vertices,
+            6,
+            accelerator,
+        ),
         points=edge_centers,
+        accelerator=accelerator,
     )
     v2c = _sort_fixed_around_vertices(
         vertices,
-        _fixed_incidence(cell_owners, cell_values, n_vertices, 6),
+        _fixed_incidence(
+            cell_owners,
+            cell_values,
+            n_vertices,
+            6,
+            accelerator,
+        ),
         points=unit_centers,
+        accelerator=accelerator,
     )
     edge_start_vertices = edges[np.maximum(v2e - 1, 0), 0]
     vertex_ids = np.arange(n_vertices, dtype=np.int32)[:, np.newaxis]
@@ -2108,37 +2189,85 @@ def _geometry_fields(
     edge_center_xyz: np.ndarray,
     icon_connectivity: dict[str, np.ndarray],
     sphere_radius: float,
+    accelerator: str = "numpy",
 ) -> dict[str, np.ndarray]:
-    cell_areas = _cell_areas(vertices, cells, sphere_radius)
-    edge_lengths = _edge_lengths(vertices, edges, sphere_radius)
-    dual_edge_lengths = _dual_edge_lengths(cell_center_xyz, edge_cells, sphere_radius)
-    edge_cell_distance = _edge_cell_distances(
-        cell_center_xyz,
-        edge_cells,
-        edge_center_xyz,
-        sphere_radius,
+    use_numba = _accelerated.should_use_numba_large(accelerator, vertices.shape[0])
+    cell_areas = (
+        _accelerated.cell_areas_numba(vertices, cells, sphere_radius)
+        if use_numba
+        else _cell_areas(vertices, cells, sphere_radius)
     )
-    edge_system_orientation = _edge_system_orientation(
-        vertices,
-        cell_center_xyz,
-        edges,
-        edge_cells,
-        edge_center_xyz,
-    )
-    normals = _edge_normal_fields(
-        vertices,
-        edges,
-        edge_center_xyz,
-        edge_system_orientation,
-    )
-    return {
-        "cell_area": cell_areas,
-        "dual_area": _dual_areas_from_edges(
+    if use_numba:
+        (
+            edge_lengths,
+            dual_edge_lengths,
+            edge_cell_distance,
+            edge_system_orientation,
+            primal_normal,
+            dual_normal,
+            primal_u,
+            primal_v,
+            dual_u,
+            dual_v,
+        ) = _accelerated.spherical_edge_metrics_numba(
+            vertices,
+            cell_center_xyz,
+            edges,
+            edge_cells,
+            edge_center_xyz,
+            sphere_radius,
+        )
+        normals = {
+            "edge_primal_normal_cartesian": primal_normal,
+            "edge_dual_normal_cartesian": dual_normal,
+            "zonal_normal_primal_edge": primal_u,
+            "meridional_normal_primal_edge": primal_v,
+            "zonal_normal_dual_edge": dual_u,
+            "meridional_normal_dual_edge": dual_v,
+        }
+    else:
+        edge_lengths = _edge_lengths(vertices, edges, sphere_radius)
+        dual_edge_lengths = _dual_edge_lengths(
+            cell_center_xyz,
+            edge_cells,
+            sphere_radius,
+        )
+        edge_cell_distance = _edge_cell_distances(
+            cell_center_xyz,
+            edge_cells,
+            edge_center_xyz,
+            sphere_radius,
+        )
+        edge_system_orientation = _edge_system_orientation(
+            vertices,
+            cell_center_xyz,
+            edges,
+            edge_cells,
+            edge_center_xyz,
+        )
+        normals = _edge_normal_fields(
+            vertices,
+            edges,
+            edge_center_xyz,
+            edge_system_orientation,
+        )
+    dual_areas = (
+        _accelerated.dual_areas_from_edges_numba(
+            icon_connectivity["v2e"],
+            edge_lengths,
+            dual_edge_lengths,
+        )
+        if use_numba
+        else _dual_areas_from_edges(
             vertices.shape[0],
             icon_connectivity["v2e"],
             edge_lengths,
             dual_edge_lengths,
-        ),
+        )
+    )
+    return {
+        "cell_area": cell_areas,
+        "dual_area": dual_areas,
         "edge_length": edge_lengths,
         "dual_edge_length": dual_edge_lengths,
         "edge_cell_distance": edge_cell_distance,
@@ -2755,7 +2884,14 @@ def _sort_around_vertex(
     return ordered[start:] + ordered[:start]
 
 
-def _edge_centers(vertices: np.ndarray, edges: np.ndarray, radius: float) -> np.ndarray:
+def _edge_centers(
+    vertices: np.ndarray,
+    edges: np.ndarray,
+    radius: float,
+    accelerator: str = "numpy",
+) -> np.ndarray:
+    if _accelerated.should_use_numba_large(accelerator, edges.shape[0]):
+        return _accelerated.edge_centers_numba(vertices, edges, radius)
     unit_vertices = _normalize_rows(vertices)
     centers = unit_vertices[edges].mean(axis=1)
     return _normalize_rows(centers) * radius
@@ -2804,13 +2940,16 @@ def _dual_areas_from_edges(
     dual_edge_lengths: np.ndarray,
 ) -> np.ndarray:
     dual = np.zeros(n_vertices, dtype=np.float64)
-    for vertex in range(n_vertices):
-        edge_indices = edges_of_vertex[vertex]
-        active = edge_indices[edge_indices > 0] - 1
-        if active.size:
-            dual[vertex] = float(
-                np.sum(0.25 * edge_lengths[active] * dual_edge_lengths[active])
-            )
+    # Each vertex has at most six incident edges. Reducing one slot at a time
+    # retains the reference contribution order without a Python loop over all
+    # vertices or a full-width floating-point gather.
+    for slot in range(edges_of_vertex.shape[1]):
+        edge_indices = edges_of_vertex[:, slot]
+        active = edge_indices > 0
+        active_edges = edge_indices[active] - 1
+        dual[active] += (
+            0.25 * edge_lengths[active_edges] * dual_edge_lengths[active_edges]
+        )
     return dual
 
 

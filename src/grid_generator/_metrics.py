@@ -28,5 +28,6 @@ class SphericalMetricsBuilder:
                 topology.edge_center_xyz,
                 topology.icon_connectivity,
                 options.sphere_radius,
+                options.accelerator,
             )
         )

@@ -42,6 +42,17 @@ def should_use_numba(accelerator: str, work_items: int | None = None) -> bool:
     return is_numba_available()
 
 
+def should_use_numba_large(accelerator: str, work_items: int) -> bool:
+    """Select Numba only when work is large enough to amortize compilation."""
+    if accelerator == ACCELERATOR_NUMPY:
+        return False
+    if accelerator == ACCELERATOR_NUMBA and not is_numba_available():
+        raise ModuleNotFoundError(
+            "Numba acceleration requires installing the 'accelerate' extra"
+        )
+    return work_items >= AUTO_NUMBA_MIN_LOOKUP_ROWS and is_numba_available()
+
+
 def should_use_numba_ordering(accelerator: str, cell_count: int) -> bool:
     if accelerator == ACCELERATOR_NUMPY:
         return False
@@ -146,6 +157,623 @@ def spring_relaxation_numba(
         target_length,
         iterations,
     )
+
+
+def dual_areas_from_edges_numba(
+    edges_of_vertex: np.ndarray,
+    edge_lengths: np.ndarray,
+    dual_edge_lengths: np.ndarray,
+) -> np.ndarray:
+    """Compute one independent dual-area reduction per vertex."""
+    return _compiled_dual_areas_from_edges()(
+        edges_of_vertex,
+        edge_lengths,
+        dual_edge_lengths,
+    )
+
+
+def cell_areas_numba(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    sphere_radius: float,
+) -> np.ndarray:
+    """Compute independent spherical triangle areas in parallel."""
+    return _compiled_cell_areas()(vertices, cells, sphere_radius)
+
+
+def matching_edge_indices_numba(
+    source_edges: np.ndarray,
+    target_edges: np.ndarray,
+    target_edges_of_vertex: np.ndarray,
+) -> np.ndarray:
+    """Match undirected source edges through a target vertex-incidence table."""
+    return _compiled_matching_edge_indices()(
+        source_edges,
+        target_edges,
+        target_edges_of_vertex,
+    )
+
+
+def build_closed_edges_numba(
+    cells: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
+    """Build closed triangular edge tables in deterministic scan order."""
+    return _compiled_build_closed_edges()(cells)
+
+
+def fixed_incidence_numba(
+    owners: np.ndarray,
+    values: np.ndarray,
+    row_count: int,
+    width: int,
+) -> tuple[np.ndarray, int, int]:
+    """Fill a bounded incidence table while preserving input order."""
+    return _compiled_fixed_incidence()(owners, values, row_count, width)
+
+
+def spherical_edge_metrics_numba(
+    vertices: np.ndarray,
+    cell_center_xyz: np.ndarray,
+    edges: np.ndarray,
+    edge_cells: np.ndarray,
+    edge_center_xyz: np.ndarray,
+    sphere_radius: float,
+) -> tuple[np.ndarray, ...]:
+    """Compute independent closed-sphere edge metrics without large temporaries."""
+    return _compiled_spherical_edge_metrics()(
+        vertices,
+        cell_center_xyz,
+        edges,
+        edge_cells,
+        edge_center_xyz,
+        sphere_radius,
+    )
+
+
+def cell_centers_numba(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """Compute spherical cell centers independently in parallel."""
+    return _compiled_cell_centers()(vertices, cells, radius)
+
+
+def edge_centers_numba(
+    vertices: np.ndarray,
+    edges: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """Compute spherical edge centers independently in parallel."""
+    return _compiled_edge_centers()(vertices, edges, radius)
+
+
+def sort_fixed_around_vertices_numba(
+    vertices: np.ndarray,
+    ids: np.ndarray,
+    points: np.ndarray,
+) -> np.ndarray:
+    """Sort bounded incidence rows geometrically and rotate to minimum ID."""
+    return _compiled_sort_fixed_around_vertices()(vertices, ids, points)
+
+
+@lru_cache(maxsize=1)
+def _compiled_sort_fixed_around_vertices():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def sort_rows(vertices, ids, points):
+        sorted_ids = np.zeros_like(ids)
+        row_angles = np.empty(ids.shape, dtype=np.float64)
+        result = np.zeros_like(ids)
+        width = ids.shape[1]
+        for vertex in prange(vertices.shape[0]):
+            origin_x = vertices[vertex, 0]
+            origin_y = vertices[vertex, 1]
+            origin_z = vertices[vertex, 2]
+            origin_norm = np.sqrt(
+                origin_x * origin_x
+                + origin_y * origin_y
+                + origin_z * origin_z
+            )
+            origin_x /= origin_norm
+            origin_y /= origin_norm
+            origin_z /= origin_norm
+            if np.abs(origin_z) > 0.9:
+                reference_x = 1.0
+                reference_y = 0.0
+                reference_z = 0.0
+            else:
+                reference_x = 0.0
+                reference_y = 0.0
+                reference_z = 1.0
+            projection = (
+                reference_x * origin_x
+                + reference_y * origin_y
+                + reference_z * origin_z
+            )
+            axis_1_x = reference_x - projection * origin_x
+            axis_1_y = reference_y - projection * origin_y
+            axis_1_z = reference_z - projection * origin_z
+            axis_1_norm = np.sqrt(
+                axis_1_x * axis_1_x
+                + axis_1_y * axis_1_y
+                + axis_1_z * axis_1_z
+            )
+            axis_1_x /= axis_1_norm
+            axis_1_y /= axis_1_norm
+            axis_1_z /= axis_1_norm
+            axis_2_x = origin_y * axis_1_z - origin_z * axis_1_y
+            axis_2_y = origin_z * axis_1_x - origin_x * axis_1_z
+            axis_2_z = origin_x * axis_1_y - origin_y * axis_1_x
+
+            count = 0
+            for slot in range(width):
+                one_based_id = ids[vertex, slot]
+                if one_based_id <= 0:
+                    continue
+                point = one_based_id - 1
+                point_x = points[point, 0]
+                point_y = points[point, 1]
+                point_z = points[point, 2]
+                radial = (
+                    point_x * origin_x
+                    + point_y * origin_y
+                    + point_z * origin_z
+                )
+                tangent_x = point_x - radial * origin_x
+                tangent_y = point_y - radial * origin_y
+                tangent_z = point_z - radial * origin_z
+                angle = np.arctan2(
+                    tangent_x * axis_2_x
+                    + tangent_y * axis_2_y
+                    + tangent_z * axis_2_z,
+                    tangent_x * axis_1_x
+                    + tangent_y * axis_1_y
+                    + tangent_z * axis_1_z,
+                )
+                position = count
+                while position > 0 and row_angles[vertex, position - 1] > angle:
+                    row_angles[vertex, position] = row_angles[vertex, position - 1]
+                    sorted_ids[vertex, position] = sorted_ids[vertex, position - 1]
+                    position -= 1
+                row_angles[vertex, position] = angle
+                sorted_ids[vertex, position] = one_based_id
+                count += 1
+            if count == 0:
+                continue
+            minimum_position = 0
+            for slot in range(1, count):
+                if sorted_ids[vertex, slot] < sorted_ids[vertex, minimum_position]:
+                    minimum_position = slot
+            for slot in range(count):
+                result[vertex, slot] = sorted_ids[
+                    vertex,
+                    (minimum_position + slot) % count,
+                ]
+        return result
+
+    return sort_rows
+
+
+@lru_cache(maxsize=1)
+def _compiled_cell_centers():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(vertices, cells, radius):
+        unit_vertices = np.empty_like(vertices)
+        for vertex in prange(vertices.shape[0]):
+            x = vertices[vertex, 0]
+            y = vertices[vertex, 1]
+            z = vertices[vertex, 2]
+            norm = np.sqrt(x * x + y * y + z * z)
+            unit_vertices[vertex, 0] = x / norm
+            unit_vertices[vertex, 1] = y / norm
+            unit_vertices[vertex, 2] = z / norm
+        centers = np.empty((cells.shape[0], 3), dtype=np.float64)
+        for cell in prange(cells.shape[0]):
+            first = cells[cell, 0]
+            second = cells[cell, 1]
+            third = cells[cell, 2]
+            ax = unit_vertices[first, 0]
+            ay = unit_vertices[first, 1]
+            az = unit_vertices[first, 2]
+            bx = unit_vertices[second, 0]
+            by = unit_vertices[second, 1]
+            bz = unit_vertices[second, 2]
+            cx = unit_vertices[third, 0]
+            cy = unit_vertices[third, 1]
+            cz = unit_vertices[third, 2]
+            abx = ax - bx
+            aby = ay - by
+            abz = az - bz
+            acx = ax - cx
+            acy = ay - cy
+            acz = az - cz
+            center_x = aby * acz - abz * acy
+            center_y = abz * acx - abx * acz
+            center_z = abx * acy - aby * acx
+            center_norm = np.sqrt(
+                center_x * center_x + center_y * center_y + center_z * center_z
+            )
+            center_x /= center_norm
+            center_y /= center_norm
+            center_z /= center_norm
+            reference_x = ax + bx + cx
+            reference_y = ay + by + cy
+            reference_z = az + bz + cz
+            reference_norm = np.sqrt(
+                reference_x * reference_x
+                + reference_y * reference_y
+                + reference_z * reference_z
+            )
+            reference_x /= reference_norm
+            reference_y /= reference_norm
+            reference_z /= reference_norm
+            if (
+                center_x * reference_x
+                + center_y * reference_y
+                + center_z * reference_z
+                < 0.0
+            ):
+                center_x = -center_x
+                center_y = -center_y
+                center_z = -center_z
+            centers[cell, 0] = center_x * radius
+            centers[cell, 1] = center_y * radius
+            centers[cell, 2] = center_z * radius
+        return centers
+
+    return compute
+
+
+@lru_cache(maxsize=1)
+def _compiled_edge_centers():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(vertices, edges, radius):
+        unit_vertices = np.empty_like(vertices)
+        for vertex in prange(vertices.shape[0]):
+            x = vertices[vertex, 0]
+            y = vertices[vertex, 1]
+            z = vertices[vertex, 2]
+            norm = np.sqrt(x * x + y * y + z * z)
+            unit_vertices[vertex, 0] = x / norm
+            unit_vertices[vertex, 1] = y / norm
+            unit_vertices[vertex, 2] = z / norm
+        centers = np.empty((edges.shape[0], 3), dtype=np.float64)
+        for edge in prange(edges.shape[0]):
+            first = edges[edge, 0]
+            second = edges[edge, 1]
+            x = 0.5 * (unit_vertices[first, 0] + unit_vertices[second, 0])
+            y = 0.5 * (unit_vertices[first, 1] + unit_vertices[second, 1])
+            z = 0.5 * (unit_vertices[first, 2] + unit_vertices[second, 2])
+            norm = np.sqrt(x * x + y * y + z * z)
+            centers[edge, 0] = x / norm * radius
+            centers[edge, 1] = y / norm * radius
+            centers[edge, 2] = z / norm * radius
+        return centers
+
+    return compute
+
+
+@lru_cache(maxsize=1)
+def _compiled_spherical_edge_metrics():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(vertices, cell_centers, edges, edge_cells, edge_centers, radius):
+        edge_count = edges.shape[0]
+        edge_lengths = np.empty(edge_count, dtype=np.float64)
+        dual_edge_lengths = np.empty(edge_count, dtype=np.float64)
+        edge_cell_distance = np.empty((edge_count, 2), dtype=np.float64)
+        edge_system_orientation = np.empty(edge_count, dtype=np.int32)
+        primal_normal = np.empty((edge_count, 3), dtype=np.float64)
+        dual_normal = np.empty((edge_count, 3), dtype=np.float64)
+        primal_u = np.empty(edge_count, dtype=np.float64)
+        primal_v = np.empty(edge_count, dtype=np.float64)
+        dual_u = np.empty(edge_count, dtype=np.float64)
+        dual_v = np.empty(edge_count, dtype=np.float64)
+
+        for edge in prange(edge_count):
+            vertex_0 = edges[edge, 0]
+            vertex_1 = edges[edge, 1]
+            v0x = vertices[vertex_0, 0]
+            v0y = vertices[vertex_0, 1]
+            v0z = vertices[vertex_0, 2]
+            v1x = vertices[vertex_1, 0]
+            v1y = vertices[vertex_1, 1]
+            v1z = vertices[vertex_1, 2]
+            v0norm = np.sqrt(v0x * v0x + v0y * v0y + v0z * v0z)
+            v1norm = np.sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+            v0x /= v0norm
+            v0y /= v0norm
+            v0z /= v0norm
+            v1x /= v1norm
+            v1y /= v1norm
+            v1z /= v1norm
+            vertex_dot = v0x * v1x + v0y * v1y + v0z * v1z
+            vertex_dot = min(1.0, max(-1.0, vertex_dot))
+            edge_lengths[edge] = np.arccos(vertex_dot) * radius
+
+            edge_x = edge_centers[edge, 0]
+            edge_y = edge_centers[edge, 1]
+            edge_z = edge_centers[edge, 2]
+            edge_norm = np.sqrt(edge_x * edge_x + edge_y * edge_y + edge_z * edge_z)
+            edge_x /= edge_norm
+            edge_y /= edge_norm
+            edge_z /= edge_norm
+
+            adjacent_0 = edge_cells[edge, 0]
+            adjacent_1 = edge_cells[edge, 1]
+            c0x = cell_centers[adjacent_0, 0]
+            c0y = cell_centers[adjacent_0, 1]
+            c0z = cell_centers[adjacent_0, 2]
+            c1x = cell_centers[adjacent_1, 0]
+            c1y = cell_centers[adjacent_1, 1]
+            c1z = cell_centers[adjacent_1, 2]
+            c0norm = np.sqrt(c0x * c0x + c0y * c0y + c0z * c0z)
+            c1norm = np.sqrt(c1x * c1x + c1y * c1y + c1z * c1z)
+            c0x /= c0norm
+            c0y /= c0norm
+            c0z /= c0norm
+            c1x /= c1norm
+            c1y /= c1norm
+            c1z /= c1norm
+            cell_dot = c0x * c1x + c0y * c1y + c0z * c1z
+            cell_dot = min(1.0, max(-1.0, cell_dot))
+            dual_edge_lengths[edge] = np.arccos(cell_dot) * radius
+            cell_dot_0 = c0x * edge_x + c0y * edge_y + c0z * edge_z
+            cell_dot_1 = c1x * edge_x + c1y * edge_y + c1z * edge_z
+            cell_dot_0 = min(1.0, max(-1.0, cell_dot_0))
+            cell_dot_1 = min(1.0, max(-1.0, cell_dot_1))
+            edge_cell_distance[edge, 0] = np.arccos(cell_dot_0) * radius
+            edge_cell_distance[edge, 1] = np.arccos(cell_dot_1) * radius
+
+            vertex_dx = v1x - v0x
+            vertex_dy = v1y - v0y
+            vertex_dz = v1z - v0z
+            cell_dx = c1x - c0x
+            cell_dy = c1y - c0y
+            cell_dz = c1z - c0z
+            cross_x = vertex_dy * cell_dz - vertex_dz * cell_dy
+            cross_y = vertex_dz * cell_dx - vertex_dx * cell_dz
+            cross_z = vertex_dx * cell_dy - vertex_dy * cell_dx
+            outward = cross_x * edge_x + cross_y * edge_y + cross_z * edge_z
+            orientation = 1 if outward > 0.0 else -1
+            edge_system_orientation[edge] = orientation
+
+            tangent_x = orientation * vertex_dx
+            tangent_y = orientation * vertex_dy
+            tangent_z = orientation * vertex_dz
+            tangent_norm = np.sqrt(
+                tangent_x * tangent_x
+                + tangent_y * tangent_y
+                + tangent_z * tangent_z
+            )
+            tangent_x /= tangent_norm
+            tangent_y /= tangent_norm
+            tangent_z /= tangent_norm
+            normal_x = edge_y * tangent_z - edge_z * tangent_y
+            normal_y = edge_z * tangent_x - edge_x * tangent_z
+            normal_z = edge_x * tangent_y - edge_y * tangent_x
+            normal_norm = np.sqrt(
+                normal_x * normal_x + normal_y * normal_y + normal_z * normal_z
+            )
+            normal_x /= normal_norm
+            normal_y /= normal_norm
+            normal_z /= normal_norm
+            primal_normal[edge, 0] = normal_x
+            primal_normal[edge, 1] = normal_y
+            primal_normal[edge, 2] = normal_z
+            dual_normal[edge, 0] = tangent_x
+            dual_normal[edge, 1] = tangent_y
+            dual_normal[edge, 2] = tangent_z
+
+            lon = np.arctan2(edge_y, edge_x)
+            lat = np.arcsin(min(1.0, max(-1.0, edge_z)))
+            east_x = -np.sin(lon)
+            east_y = np.cos(lon)
+            north_x = -np.sin(lat) * np.cos(lon)
+            north_y = -np.sin(lat) * np.sin(lon)
+            north_z = np.cos(lat)
+            primal_u[edge] = normal_x * east_x + normal_y * east_y
+            primal_v[edge] = (
+                normal_x * north_x + normal_y * north_y + normal_z * north_z
+            )
+            dual_u[edge] = tangent_x * east_x + tangent_y * east_y
+            dual_v[edge] = (
+                tangent_x * north_x + tangent_y * north_y + tangent_z * north_z
+            )
+        return (
+            edge_lengths,
+            dual_edge_lengths,
+            edge_cell_distance,
+            edge_system_orientation,
+            primal_normal,
+            dual_normal,
+            primal_u,
+            primal_v,
+            dual_u,
+            dual_v,
+        )
+
+    return compute
+
+
+@lru_cache(maxsize=1)
+def _compiled_build_closed_edges():
+    from numba import njit
+
+    @njit
+    def build(cells):
+        cell_count = cells.shape[0]
+        expected_edges = 3 * cell_count // 2
+        edges = np.empty((expected_edges, 2), dtype=np.int32)
+        cell_edges = np.empty((cell_count, 3), dtype=np.int32)
+        edge_cells = np.full((expected_edges, 2), -1, dtype=np.int32)
+        edge_lookup = {}
+        stride = np.int64(np.max(cells)) + 1
+        edge_count = 0
+        for cell_index in range(cell_count):
+            for local_index in range(3):
+                if local_index == 0:
+                    first = cells[cell_index, 1]
+                    second = cells[cell_index, 0]
+                elif local_index == 1:
+                    first = cells[cell_index, 2]
+                    second = cells[cell_index, 1]
+                else:
+                    first = cells[cell_index, 0]
+                    second = cells[cell_index, 2]
+                low = first if first < second else second
+                high = second if first < second else first
+                key = np.int64(low) * stride + np.int64(high)
+                if key not in edge_lookup:
+                    if edge_count >= expected_edges:
+                        return edges, cell_edges, edge_cells, edge_count, 1
+                    edge_index = edge_count
+                    edge_lookup[key] = edge_index
+                    edges[edge_index, 0] = first
+                    edges[edge_index, 1] = second
+                    edge_cells[edge_index, 0] = cell_index
+                    edge_count += 1
+                else:
+                    edge_index = edge_lookup[key]
+                    if edge_cells[edge_index, 1] < 0:
+                        edge_cells[edge_index, 1] = cell_index
+                    else:
+                        return edges, cell_edges, edge_cells, edge_index, 2
+                cell_edges[cell_index, local_index] = edge_index
+        if edge_count != expected_edges:
+            return edges, cell_edges, edge_cells, edge_count, 3
+        for edge_index in range(edge_count):
+            if edge_cells[edge_index, 1] < 0:
+                return edges, cell_edges, edge_cells, edge_index, 3
+        return edges, cell_edges, edge_cells, -1, 0
+
+    return build
+
+
+@lru_cache(maxsize=1)
+def _compiled_fixed_incidence():
+    from numba import njit
+
+    @njit
+    def fill(owners, values, row_count, width):
+        incidence = np.zeros((row_count, width), dtype=np.int32)
+        counts = np.zeros(row_count, dtype=np.int32)
+        for item in range(owners.shape[0]):
+            owner = owners[item]
+            position = counts[owner]
+            if position >= width:
+                return incidence, owner, position + 1
+            incidence[owner, position] = values[item]
+            counts[owner] = position + 1
+        return incidence, -1, 0
+
+    return fill
+
+
+@lru_cache(maxsize=1)
+def _compiled_matching_edge_indices():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def match(source_edges, target_edges, target_edges_of_vertex):
+        indices = np.full(source_edges.shape[0], -1, dtype=np.int64)
+        for source_index in prange(source_edges.shape[0]):
+            first = source_edges[source_index, 0]
+            second = source_edges[source_index, 1]
+            for slot in range(target_edges_of_vertex.shape[1]):
+                target_index = target_edges_of_vertex[first, slot] - 1
+                if target_index < 0:
+                    continue
+                target_first = target_edges[target_index, 0]
+                target_second = target_edges[target_index, 1]
+                if (
+                    (target_first == first and target_second == second)
+                    or (target_first == second and target_second == first)
+                ):
+                    indices[source_index] = target_index
+                    break
+        return indices
+
+    return match
+
+
+@lru_cache(maxsize=1)
+def _compiled_cell_areas():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(vertices, cells, sphere_radius):
+        unit_vertices = np.empty_like(vertices)
+        for vertex in prange(vertices.shape[0]):
+            x = vertices[vertex, 0]
+            y = vertices[vertex, 1]
+            z = vertices[vertex, 2]
+            norm = np.sqrt(x * x + y * y + z * z)
+            unit_vertices[vertex, 0] = x / norm
+            unit_vertices[vertex, 1] = y / norm
+            unit_vertices[vertex, 2] = z / norm
+
+        areas = np.empty(cells.shape[0], dtype=np.float64)
+        for cell in prange(cells.shape[0]):
+            angle_sum = 0.0
+            for index in range(3):
+                a_index = cells[cell, index]
+                b_index = cells[cell, (index + 1) % 3]
+                c_index = cells[cell, (index + 2) % 3]
+                ax = unit_vertices[a_index, 0]
+                ay = unit_vertices[a_index, 1]
+                az = unit_vertices[a_index, 2]
+                bx = unit_vertices[b_index, 0]
+                by = unit_vertices[b_index, 1]
+                bz = unit_vertices[b_index, 2]
+                cx = unit_vertices[c_index, 0]
+                cy = unit_vertices[c_index, 1]
+                cz = unit_vertices[c_index, 2]
+
+                abx = ay * bz - az * by
+                aby = az * bx - ax * bz
+                abz = ax * by - ay * bx
+                acx = ay * cz - az * cy
+                acy = az * cx - ax * cz
+                acz = ax * cy - ay * cx
+                ab_norm = np.sqrt(abx * abx + aby * aby + abz * abz)
+                ac_norm = np.sqrt(acx * acx + acy * acy + acz * acz)
+                dot = (abx * acx + aby * acy + abz * acz) / (ab_norm * ac_norm)
+                if dot < -1.0:
+                    dot = -1.0
+                elif dot > 1.0:
+                    dot = 1.0
+                angle_sum += np.arccos(dot)
+            areas[cell] = (angle_sum - np.pi) * sphere_radius * sphere_radius
+        return areas
+
+    return compute
+
+
+@lru_cache(maxsize=1)
+def _compiled_dual_areas_from_edges():
+    from numba import njit, prange
+
+    @njit(parallel=True)
+    def compute(edges_of_vertex, edge_lengths, dual_edge_lengths):
+        dual = np.zeros(edges_of_vertex.shape[0], dtype=np.float64)
+        for vertex in prange(edges_of_vertex.shape[0]):
+            total = 0.0
+            for slot in range(edges_of_vertex.shape[1]):
+                edge_index = edges_of_vertex[vertex, slot] - 1
+                if edge_index >= 0:
+                    total += 0.25 * edge_lengths[edge_index] * dual_edge_lengths[edge_index]
+            dual[vertex] = total
+        return dual
+
+    return compute
 
 
 @lru_cache(maxsize=1)

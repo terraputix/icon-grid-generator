@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from . import _accelerated
 from ._geometry import SphericalIcosahedralGeometry
 from ._metrics import SphericalMetricsBuilder
 from ._optimization import (
@@ -42,6 +43,8 @@ class _GlobalParentData:
     edges: np.ndarray
     cell_edges: np.ndarray
     edge_center_xyz: np.ndarray
+    edge_primal_normal_cartesian: np.ndarray
+    edges_of_vertex: np.ndarray
 
 
 def _generate_grid(
@@ -92,6 +95,21 @@ def _generate_staged_global_grid(
     vertices = vertices * options.radius
     geometry = _geometry_from_vertices(spec, options, vertices, cells, provenance)
     stage_iterations = _stage_global_optimization_iterations(options, parent)
+    parent_key = context.key(parent_spec)
+    context.grids.pop(parent_key, None)
+    context.parent_data[parent_key] = _GlobalParentData(
+        spec=parent.spec,
+        vertices=parent.vertices,
+        cells=parent.cells,
+        edges=parent.edges,
+        cell_edges=parent.cell_edges,
+        edge_center_xyz=parent.edge_center_xyz,
+        edge_primal_normal_cartesian=parent.geometry[
+            "edge_primal_normal_cartesian"
+        ],
+        edges_of_vertex=parent.icon_connectivity["v2e"],
+    )
+    del parent
     grid = _assemble_global_grid(
         spec,
         options,
@@ -99,14 +117,15 @@ def _generate_staged_global_grid(
         context,
         build_metrics=stage_iterations == 0,
     )
+    # Parent geometry/topology is only needed through child assembly. Release
+    # the quarter-sized parent before the child's spring and metric work.
+    _evict_staged_parent_cache(context, parent_spec, spec)
     if stage_iterations == 0:
-        _evict_staged_parent_cache(context, parent_spec, spec)
         return grid
     relaxed = _optimize_global_grid_for_generation(
         grid,
         _GlobalOptimizationOptions(method="spring", iterations=stage_iterations),
     )
-    _evict_staged_parent_cache(context, parent_spec, spec)
     return relaxed
 
 
@@ -132,7 +151,12 @@ def _geometry_from_vertices(
 ) -> GeometryData:
     _gg()._check_expected_counts(spec, vertices, cells)
     vertex_lon, vertex_lat = _gg()._lon_lat(vertices)
-    cell_center_xyz = _gg()._cell_centers(vertices, cells, options.radius)
+    cell_center_xyz = _gg()._cell_centers(
+        vertices,
+        cells,
+        options.radius,
+        options.accelerator,
+    )
     lon, lat = _gg()._lon_lat(cell_center_xyz)
     return GeometryData(
         vertices=vertices,
@@ -221,17 +245,36 @@ def _adjust_global_edge_orientation(
     if spec.bisections == 0:
         return topology
     parent_spec = _gg().GlobalGridSpec(root=spec.root, bisections=spec.bisections - 1)
-    parent = _generate_grid(parent_spec, options, context)
+    parent_key = context.key(parent_spec)
+    parent = context.grids.get(parent_key)
+    if parent is None:
+        parent = context.parent_data.get(parent_key)
+    if parent is None:
+        parent = _generate_grid(parent_spec, options, context)
+    parent_normals = (
+        parent.edge_primal_normal_cartesian
+        if isinstance(parent, _GlobalParentData)
+        else parent.geometry["edge_primal_normal_cartesian"]
+    )
+    parent_edges_of_vertex = (
+        parent.edges_of_vertex
+        if isinstance(parent, _GlobalParentData)
+        else parent.icon_connectivity["v2e"]
+    )
     provenance = geometry.bisection_provenance
     if provenance is None:
         parent_vertex_index = _gg()._parent_vertex_indices(geometry.vertices, parent)
         parent_for_mapping: Any | _GlobalParentData | BisectionProvenance = parent
-        parent_normals = parent.geometry["edge_primal_normal_cartesian"]
     else:
         parent_vertex_index = provenance.parent_vertex_index
         parent_for_mapping = provenance
-        parent_edge_map = _matching_edge_indices_by_vertices(provenance.edges, parent.edges)
-        parent_normals = parent.geometry["edge_primal_normal_cartesian"][parent_edge_map]
+        parent_edge_map = _matching_edge_indices_by_vertices(
+            provenance.edges,
+            parent.edges,
+            accelerator=options.accelerator,
+            target_edges_of_vertex=parent_edges_of_vertex,
+        )
+        parent_normals = parent_normals[parent_edge_map]
     if (
         isinstance(parent_for_mapping, BisectionProvenance)
         and parent_for_mapping.child_parent_edge_index is not None
@@ -271,16 +314,29 @@ def _adjust_global_edge_orientation(
     edges[flip] = edges[flip][:, ::-1]
     edge_cells[flip] = edge_cells[flip][:, ::-1]
 
-    edge_center_xyz = _gg()._edge_centers(geometry.vertices, edges, options.radius)
-    edge_lon, edge_lat = _gg()._lon_lat(edge_center_xyz)
-    icon_connectivity = _gg()._icon_connectivity(
+    edge_center_xyz = _gg()._edge_centers(
         geometry.vertices,
-        geometry.cells,
-        geometry.cell_center_xyz,
         edges,
-        topology.cell_edges,
-        edge_cells,
+        options.radius,
+        options.accelerator,
     )
+    edge_lon, edge_lat = _gg()._lon_lat(edge_center_xyz)
+    icon_connectivity = dict(topology.icon_connectivity)
+    orientation_of_normal = icon_connectivity["orientation_of_normal"].copy()
+    orientation_of_normal[flip[topology.cell_edges]] *= -1
+    icon_connectivity["orientation_of_normal"] = orientation_of_normal
+    edge_orientation = icon_connectivity["edge_orientation"].copy()
+    active_incidence = icon_connectivity["v2e"] > 0
+    flipped_incidence = flip[np.maximum(icon_connectivity["v2e"] - 1, 0)]
+    edge_orientation[active_incidence & flipped_incidence] *= -1
+    icon_connectivity["edge_orientation"] = edge_orientation
+
+    connectivity = dict(topology.connectivity)
+    connectivity["adjacent_cell_of_edge"] = edge_cells
+    connectivity["edge_vertices"] = edges
+    neighbor_tables = dict(topology.neighbor_tables)
+    neighbor_tables["e2c"] = edge_cells
+    neighbor_tables["e2v"] = edges
     return TopologyData(
         edges=edges,
         cell_edges=topology.cell_edges,
@@ -289,18 +345,8 @@ def _adjust_global_edge_orientation(
         edge_lon=edge_lon,
         edge_lat=edge_lat,
         icon_connectivity=icon_connectivity,
-        connectivity=_gg()._public_connectivity(
-            geometry.cells,
-            edges,
-            edge_cells,
-            icon_connectivity,
-        ),
-        neighbor_tables=_gg()._neighbor_tables(
-            geometry.cells,
-            edges,
-            edge_cells,
-            icon_connectivity,
-        ),
+        connectivity=connectivity,
+        neighbor_tables=neighbor_tables,
         source_edge_index=topology.source_edge_index,
     )
 
@@ -334,7 +380,26 @@ def _matching_unit_point_indices(source: np.ndarray, target: np.ndarray) -> np.n
     return indices
 
 
-def _matching_edge_indices_by_vertices(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+def _matching_edge_indices_by_vertices(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    accelerator: str = "numpy",
+    target_edges_of_vertex: np.ndarray | None = None,
+) -> np.ndarray:
+    if (
+        target_edges_of_vertex is not None
+        and _accelerated.should_use_numba(accelerator, source.shape[0])
+    ):
+        indices = _accelerated.matching_edge_indices_numba(
+            source,
+            target,
+            target_edges_of_vertex,
+        )
+        missing = np.flatnonzero(indices < 0)
+        if missing.size:
+            raise RuntimeError(f"edge {int(missing[0])} has no matching target edge")
+        return indices
     source_keys = np.sort(source.astype(np.int64, copy=False), axis=1)
     target_keys = np.sort(target.astype(np.int64, copy=False), axis=1)
     order = np.lexsort(tuple(target_keys[:, column] for column in range(target_keys.shape[1] - 1, -1, -1)))
@@ -374,6 +439,11 @@ def _parent_grid(
         parent_geometry,
     )
     parent_topology = GlobalTopologyBuilder().build(parent_spec, options, parent_geometry)
+    parent_metrics = SphericalMetricsBuilder().build(
+        options,
+        parent_geometry,
+        parent_topology,
+    )
     parent_data = _GlobalParentData(
         spec=parent_spec,
         vertices=parent_geometry.vertices,
@@ -381,6 +451,10 @@ def _parent_grid(
         edges=parent_topology.edges,
         cell_edges=parent_topology.cell_edges,
         edge_center_xyz=parent_topology.edge_center_xyz,
+        edge_primal_normal_cartesian=parent_metrics.fields[
+            "edge_primal_normal_cartesian"
+        ],
+        edges_of_vertex=parent_topology.icon_connectivity["v2e"],
     )
     context.parent_data[parent_key] = parent_data
     return parent_data

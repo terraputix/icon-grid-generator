@@ -361,6 +361,8 @@ def test_global_optimization_options_can_be_configured_and_called_directly():
     assert facade.metadata["global_optimization_iterations"] == 20
     assert np.all(np.isfinite(optimized.geometry["cell_area"]))
     assert not np.allclose(optimized.vertices, raw.vertices)
+    assert not np.shares_memory(optimized.cells, raw.cells)
+    assert not np.shares_memory(optimized.edges, raw.edges)
     assert optimized.metadata["uuidOfHGrid"] != raw.metadata["uuidOfHGrid"]
     assert optimized.metadata["geometry_transform"] == "global_spring"
     assert optimized.metadata["geometry_transform_source_uuid"] == raw.metadata["uuidOfHGrid"]
@@ -504,6 +506,14 @@ def test_private_matching_edge_indices_by_vertices_matches_spatial_mapping():
     spatial = gg._matching_unit_point_indices(provenance_edge_centers, parent.edge_center_xyz)
 
     assert np.array_equal(keyed, spatial)
+    if _accelerated.is_numba_available():
+        compiled = gg._matching_edge_indices_by_vertices(
+            provenance.edges,
+            parent.edges,
+            accelerator="numba",
+            target_edges_of_vertex=parent.icon_connectivity["v2e"],
+        )
+        assert np.array_equal(compiled, keyed)
     with pytest.raises(RuntimeError, match="matching target edge"):
         gg._matching_edge_indices_by_vertices(
             np.asarray([[0, parent.dims["vertex"]]], dtype=np.int32),
@@ -606,6 +616,11 @@ def test_auto_accelerator_uses_numba_only_for_large_lookup_work():
     assert not _accelerated.should_use_numba("auto")
     assert not _accelerated.should_use_numba("auto", threshold - 1)
     assert _accelerated.should_use_numba("auto", threshold) == _accelerated.is_numba_available()
+    assert not _accelerated.should_use_numba_large("auto", threshold - 1)
+    assert (
+        _accelerated.should_use_numba_large("auto", threshold)
+        == _accelerated.is_numba_available()
+    )
 
     order_threshold = _accelerated.AUTO_NUMBA_MIN_ORDER_CELLS
     assert not _accelerated.should_use_numba_ordering("auto", order_threshold - 1)
@@ -615,12 +630,15 @@ def test_auto_accelerator_uses_numba_only_for_large_lookup_work():
     )
 
 
-def test_numba_accelerator_is_optional_and_matches_numpy_when_available():
+def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypatch):
     if not _accelerated.is_numba_available():
         with pytest.raises(ModuleNotFoundError, match="accelerate"):
             generate_grid("R02B02", options={"accelerator": "numba"})
         return
 
+    # Exercise the large-work kernels on a small fixture without raising the
+    # production threshold or making the test allocate an operational grid.
+    monkeypatch.setattr(_accelerated, "AUTO_NUMBA_MIN_LOOKUP_ROWS", 0)
     numpy_grid = generate_grid("R02B02", options={"accelerator": "numpy"})
     numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
     repeated_numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
@@ -629,7 +647,13 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available():
     assert np.array_equal(numba_grid.edges, numpy_grid.edges)
     assert np.array_equal(numba_grid.vertices, repeated_numba_grid.vertices)
     assert np.array_equal(numba_grid.cell_center_xyz, repeated_numba_grid.cell_center_xyz)
+    assert np.array_equal(numba_grid.edge_center_xyz, repeated_numba_grid.edge_center_xyz)
     assert numba_grid.metadata["uuidOfHGrid"] == numpy_grid.metadata["uuidOfHGrid"]
+    for name in numba_grid.icon_connectivity:
+        assert np.array_equal(
+            numba_grid.icon_connectivity[name],
+            numpy_grid.icon_connectivity[name],
+        )
     assert np.array_equal(
         numba_grid.refinement["parent_cell_type"],
         numpy_grid.refinement["parent_cell_type"],
@@ -639,17 +663,62 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available():
         numpy_grid.refinement["edge_parent_type"],
     )
     assert np.allclose(numba_grid.vertices, numpy_grid.vertices, rtol=1e-12, atol=1e-14)
-    for name in ("cell_area", "dual_area", "edge_length", "dual_edge_length"):
+    assert np.allclose(
+        numba_grid.cell_center_xyz,
+        numpy_grid.cell_center_xyz,
+        rtol=1e-12,
+        atol=1e-8,
+    )
+    assert np.allclose(
+        numba_grid.edge_center_xyz,
+        numpy_grid.edge_center_xyz,
+        rtol=1e-12,
+        atol=1e-8,
+    )
+    for name in (
+        "cell_area",
+        "dual_area",
+        "edge_length",
+        "dual_edge_length",
+        "edge_cell_distance",
+        "edge_vert_distance",
+        "edgequad_area",
+    ):
         assert np.allclose(
             numba_grid.geometry[name],
             numpy_grid.geometry[name],
             rtol=2e-10,
             atol=1e-8,
         )
+    for name in (
+        "edge_primal_normal_cartesian",
+        "edge_dual_normal_cartesian",
+        "zonal_normal_primal_edge",
+        "meridional_normal_primal_edge",
+        "zonal_normal_dual_edge",
+        "meridional_normal_dual_edge",
+    ):
+        assert np.allclose(
+            numba_grid.geometry[name],
+            numpy_grid.geometry[name],
+            rtol=1e-10,
+            atol=1e-12,
+        )
+        assert np.array_equal(
+            numba_grid.geometry[name],
+            repeated_numba_grid.geometry[name],
+        )
     assert np.isclose(
         numba_grid.geometry["cell_area"].sum(),
         4.0 * np.pi * numba_grid.options.sphere_radius**2,
         rtol=2e-10,
+    )
+    expected_edges = gg._build_edges(numpy_grid.cells)
+    compiled_edges = _accelerated.build_closed_edges_numba(numpy_grid.cells)
+    assert compiled_edges[3:] == (-1, 0)
+    assert all(
+        np.array_equal(actual, expected)
+        for actual, expected in zip(compiled_edges[:3], expected_edges, strict=True)
     )
 
 
@@ -1575,6 +1644,7 @@ def test_private_accelerated_lookup_algorithms_with_identity_njit(monkeypatch):
     _accelerated._compiled_lookup_width3.cache_clear()
     _accelerated._compiled_order_cells_by_edges.cache_clear()
     _accelerated._compiled_fill_bisection_children.cache_clear()
+    _accelerated._compiled_build_closed_edges.cache_clear()
     try:
         signature2 = np.asarray([[1, 2], [3, 4]], dtype=np.int64)
         query2 = np.asarray([[1, 2], [2, 3], [3, 4]], dtype=np.int64)
@@ -1628,6 +1698,7 @@ def test_private_accelerated_lookup_algorithms_with_identity_njit(monkeypatch):
         _accelerated._compiled_lookup_width3.cache_clear()
         _accelerated._compiled_order_cells_by_edges.cache_clear()
         _accelerated._compiled_fill_bisection_children.cache_clear()
+        _accelerated._compiled_build_closed_edges.cache_clear()
 
     assert np.array_equal(parent2, np.asarray([11, 0, 22], dtype=np.int32))
     assert np.array_equal(type2, np.asarray([201, 0, 202], dtype=np.int32))
@@ -1658,10 +1729,13 @@ def test_private_numba_accelerator_selection_branches(monkeypatch):
     monkeypatch.setattr(_accelerated, "is_numba_available", lambda: False)
     with pytest.raises(ModuleNotFoundError, match="accelerate"):
         _accelerated.should_use_numba("numba")
+    with pytest.raises(ModuleNotFoundError, match="accelerate"):
+        _accelerated.should_use_numba_large("numba", 10**9)
 
     monkeypatch.setattr(_accelerated, "is_numba_available", lambda: True)
     assert _accelerated.should_use_numba("numba")
     assert _accelerated.should_use_numba("numpy") is False
+    assert _accelerated.should_use_numba_large("numpy", 10**9) is False
     assert _accelerated.should_use_numba("auto", _accelerated.AUTO_NUMBA_MIN_LOOKUP_ROWS)
     assert _accelerated.should_use_numba_ordering("numba", 1)
     assert _accelerated.should_use_numba_ordering("numpy", 10**9) is False

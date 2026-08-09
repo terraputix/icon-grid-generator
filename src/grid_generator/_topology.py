@@ -30,7 +30,12 @@ class GlobalTopologyBuilder:
                 f"generated {edges.shape[0]} edges, expected {spec.expected_edges}"
             )
 
-        edge_center_xyz = gg._edge_centers(geometry.vertices, edges, options.radius)
+        edge_center_xyz = gg._edge_centers(
+            geometry.vertices,
+            edges,
+            options.radius,
+            options.accelerator,
+        )
         edge_lon, edge_lat = gg._lon_lat(edge_center_xyz)
         icon_connectivity = gg._icon_connectivity(
             geometry.vertices,
@@ -39,6 +44,7 @@ class GlobalTopologyBuilder:
             edges,
             cell_edges,
             edge_cells,
+            options.accelerator,
         )
         return TopologyData(
             edges=edges,

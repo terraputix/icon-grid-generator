@@ -34,7 +34,12 @@ class SphericalIcosahedralGeometry:
         gg._check_expected_counts(spec, vertices, cells)
 
         vertex_lon, vertex_lat = gg._lon_lat(vertices)
-        cell_center_xyz = gg._cell_centers(vertices, cells, options.radius)
+        cell_center_xyz = gg._cell_centers(
+            vertices,
+            cells,
+            options.radius,
+            options.accelerator,
+        )
         lon, lat = gg._lon_lat(cell_center_xyz)
         return GeometryData(
             vertices=vertices,

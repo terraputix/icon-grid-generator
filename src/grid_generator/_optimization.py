@@ -164,7 +164,12 @@ def _optimize_global_grid_for_generation(
     grid: Any,
     options: _GlobalOptimizationOptions,
 ) -> Any:
-    return _run_global_optimization(grid, options, record_transform=False)
+    return _run_global_optimization(
+        grid,
+        options,
+        record_transform=False,
+        reuse_static_arrays=True,
+    )
 
 
 def _run_global_optimization(
@@ -172,10 +177,15 @@ def _run_global_optimization(
     options: _GlobalOptimizationOptions,
     *,
     record_transform: bool,
+    reuse_static_arrays: bool = False,
 ) -> Any:
     vertices = _spring_relaxed_vertices(grid, options)
     if not record_transform:
-        return _rebuild_grid(grid, vertices)
+        return _rebuild_grid(
+            grid,
+            vertices,
+            reuse_static_arrays=reuse_static_arrays,
+        )
     rebuilt = _rebuild_grid(
         grid,
         vertices,
@@ -473,13 +483,18 @@ def _rebuild_grid(
     vertices: np.ndarray,
     *,
     transform: tuple[str, dict[str, Any]] | None = None,
+    reuse_static_arrays: bool = False,
 ) -> Any:
     if _uses_planar_projection(grid):
         from ._planar import rebuild_planar_grid
 
         rebuilt = rebuild_planar_grid(grid, vertices)
     else:
-        rebuilt = _rebuild_spherical_grid(grid, vertices)
+        rebuilt = _rebuild_spherical_grid(
+            grid,
+            vertices,
+            reuse_static_arrays=reuse_static_arrays,
+        )
     if transform is None:
         return rebuilt
     return replace(
@@ -495,13 +510,28 @@ def _uses_planar_projection(grid: Any) -> bool:
     )
 
 
-def _rebuild_spherical_grid(grid: Any, vertices: np.ndarray) -> Any:
+def _rebuild_spherical_grid(
+    grid: Any,
+    vertices: np.ndarray,
+    *,
+    reuse_static_arrays: bool = False,
+) -> Any:
     from . import grid_generator as gg
 
-    cell_center_xyz = gg._cell_centers(vertices, grid.cells, grid.options.radius)
+    cell_center_xyz = gg._cell_centers(
+        vertices,
+        grid.cells,
+        grid.options.radius,
+        grid.options.accelerator,
+    )
     vertex_lon, vertex_lat = gg._lon_lat(vertices)
     lon, lat = gg._lon_lat(cell_center_xyz)
-    edge_center_xyz = gg._edge_centers(vertices, grid.edges, grid.options.radius)
+    edge_center_xyz = gg._edge_centers(
+        vertices,
+        grid.edges,
+        grid.options.radius,
+        grid.options.accelerator,
+    )
     edge_lon, edge_lat = gg._lon_lat(edge_center_xyz)
     geometry = _spherical_metrics(grid, vertices, cell_center_xyz, edge_center_xyz)
     metadata = dict(grid.metadata)
@@ -510,7 +540,7 @@ def _rebuild_spherical_grid(grid: Any, vertices: np.ndarray) -> Any:
         spec=grid.spec,
         options=grid.options,
         vertices=vertices,
-        cells=grid.cells.copy(),
+        cells=grid.cells if reuse_static_arrays else grid.cells.copy(),
         lon=lon,
         lat=lat,
         vertex_lon=vertex_lon,
@@ -518,17 +548,33 @@ def _rebuild_spherical_grid(grid: Any, vertices: np.ndarray) -> Any:
         cell_center_xyz=cell_center_xyz,
         cell_vertex_lon=vertex_lon[grid.cells],
         cell_vertex_lat=vertex_lat[grid.cells],
-        edges=grid.edges.copy(),
-        cell_edges=grid.cell_edges.copy(),
-        edge_cells=grid.edge_cells.copy(),
+        edges=grid.edges if reuse_static_arrays else grid.edges.copy(),
+        cell_edges=grid.cell_edges if reuse_static_arrays else grid.cell_edges.copy(),
+        edge_cells=grid.edge_cells if reuse_static_arrays else grid.edge_cells.copy(),
         edge_center_xyz=edge_center_xyz,
         edge_lon=edge_lon,
         edge_lat=edge_lat,
-        icon_connectivity={name: value.copy() for name, value in grid.icon_connectivity.items()},
-        connectivity={name: value.copy() for name, value in grid.connectivity.items()},
-        neighbor_tables={name: value.copy() for name, value in grid.neighbor_tables.items()},
+        icon_connectivity=(
+            grid.icon_connectivity
+            if reuse_static_arrays
+            else {name: value.copy() for name, value in grid.icon_connectivity.items()}
+        ),
+        connectivity=(
+            grid.connectivity
+            if reuse_static_arrays
+            else {name: value.copy() for name, value in grid.connectivity.items()}
+        ),
+        neighbor_tables=(
+            grid.neighbor_tables
+            if reuse_static_arrays
+            else {name: value.copy() for name, value in grid.neighbor_tables.items()}
+        ),
         geometry=geometry,
-        refinement={name: value.copy() for name, value in grid.refinement.items()},
+        refinement=(
+            grid.refinement
+            if reuse_static_arrays
+            else {name: value.copy() for name, value in grid.refinement.items()}
+        ),
         metadata=metadata,
         geometry_spec=grid.geometry_spec,
     )
@@ -589,6 +635,7 @@ def _spherical_metrics(
             edge_center_xyz,
             grid.icon_connectivity,
             grid.options.sphere_radius,
+            grid.options.accelerator,
         )
     cell_areas = gg._cell_areas(vertices, grid.cells, grid.options.sphere_radius)
     edge_lengths = gg._edge_lengths(vertices, grid.edges, grid.options.sphere_radius)
