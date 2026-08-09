@@ -51,35 +51,30 @@ mode with the development extras:
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -e ".[test,docs]"
+python -m pip install -e ".[accelerate,test,docs,netcdf,xarray]"
+python -m pip install build twine
 ```
 
-Optional extras are available for accelerated, NetCDF, and xarray workflows:
-
-```bash
-python -m pip install -e ".[accelerate,netcdf,xarray]"
-```
+Numba remains optional for package users, but installing the full development
+set lets contributors exercise every supported path.
 
 ## Local Checks
 
 Run these before opening a pull request:
 
 ```bash
-python -m ruff check .
-python -m pytest -q
-python -m mkdocs build --strict
+make check
 ```
 
 For performance-sensitive grid-generation changes, install the `accelerate`
-extra and also run `make perf-check`.
+extra and also run `make perf-check`. The streamed case defaults to ignored
+`profiling/` storage; set `GRID_GENERATOR_PERF_WORK_DIR` to an explicit
+disk-backed scratch directory when appropriate.
 
 For packaging, release, README, or metadata changes, also run:
 
 ```bash
-python -m pip install build twine
-rm -rf dist build
-python -m build
-python -m twine check dist/*
+make package
 ```
 
 ## Pull Request Expectations

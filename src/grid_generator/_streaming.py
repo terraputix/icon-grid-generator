@@ -17,7 +17,7 @@ from ._optimization import _GlobalOptimizationOptions, _spring_relaxed_vertices
 from ._types import BisectionProvenance
 
 
-DEFAULT_IN_MEMORY_BASE_BISECTION = 7
+DEFAULT_IN_MEMORY_BASE_CELLS = 1_310_720
 DEFAULT_STREAM_CHUNK_SIZE = 1_000_000
 
 _EDGE_METRIC_FIELDS = frozenset(
@@ -237,12 +237,19 @@ def generate_global_grid_to_netcdf(
         or chunk_size <= 0
     ):
         raise ValueError("chunk_size must be a positive integer")
-    if spec.bisections <= DEFAULT_IN_MEMORY_BASE_BISECTION:
+    base_bisection = _in_memory_base_bisection(spec)
+    if spec.expected_cells <= DEFAULT_IN_MEMORY_BASE_CELLS:
         from . import grid_generator as gg
 
         return gg.generate_grid(spec, options).to_netcdf(
             path,
             fields=selected_fields,
+        )
+    if base_bisection is None:
+        raise ValueError(
+            "export-first generation cannot bound the initial root stage; "
+            "use a smaller-root decomposition when available or the in-memory "
+            "generate_grid workflow with sufficient memory"
         )
     if not _accelerated.should_use_numba(options.accelerator, spec.expected_cells):
         raise ModuleNotFoundError(
@@ -275,6 +282,15 @@ def generate_global_grid_to_netcdf(
     )
 
 
+def _in_memory_base_bisection(spec: Any) -> int | None:
+    """Return the largest stage whose complete grid fits the base-cell budget."""
+    for bisection in range(spec.bisections, -1, -1):
+        frequency = spec.root * 2**bisection
+        if 20 * frequency**2 <= DEFAULT_IN_MEMORY_BASE_CELLS:
+            return bisection
+    return None
+
+
 def _generate_compact_global_grid(
     spec: Any,
     options: Any,
@@ -285,7 +301,9 @@ def _generate_compact_global_grid(
     """Generate staged global topology while shedding derived parent fields."""
     from . import grid_generator as gg
 
-    base_bisection = min(spec.bisections, DEFAULT_IN_MEMORY_BASE_BISECTION)
+    base_bisection = _in_memory_base_bisection(spec)
+    if base_bisection is None:
+        raise ValueError("global root stage exceeds the in-memory base-cell budget")
     compact = None
     if checkpoint_store is not None and resume:
         for bisection in range(spec.bisections, base_bisection - 1, -1):

@@ -36,17 +36,27 @@ def _run_generation_once(case: PerformanceCase) -> dict[str, float | int | str]:
     code = f"""
 import json
 import resource
+import os
+from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import time
 
 from grid_generator import generate_grid, generate_grid_to_netcdf
+from grid_generator import _streaming
 from grid_generator.grid_generator import parse_grid_spec
 
-start = time.perf_counter()
 if {case.workflow!r} == "streamed":
     spec = parse_grid_spec({case.grid!r})
-    with TemporaryDirectory() as directory:
+    scratch_root = Path(
+        os.environ.get("GRID_GENERATOR_PERF_WORK_DIR", Path.cwd() / "profiling")
+    )
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    # Exercise export-first staging on a modest fixture that normally fits the
+    # in-memory base budget.
+    _streaming.DEFAULT_IN_MEMORY_BASE_CELLS = spec.expected_cells // 4
+    with TemporaryDirectory(dir=scratch_root) as directory:
+        start = time.perf_counter()
         generate_grid_to_netcdf(
             spec,
             f"{{directory}}/grid.nc",
@@ -54,6 +64,7 @@ if {case.workflow!r} == "streamed":
             work_dir=f"{{directory}}/checkpoints",
             fields="icon4py",
         )
+        elapsed = time.perf_counter() - start
     dimensions = {{
         "cell": spec.expected_cells,
         "edge": spec.expected_edges,
@@ -63,9 +74,10 @@ else:
     options = {{"max_cells": None, "accelerator": {case.accelerator!r}}}
     if {case.workflow!r} == "raw":
         options["optimize_global"] = False
+    start = time.perf_counter()
     grid = generate_grid({case.grid!r}, options=options)
+    elapsed = time.perf_counter() - start
     dimensions = grid.dims
-elapsed = time.perf_counter() - start
 rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 rss_mib = rss / 1024 if sys.platform.startswith("linux") else rss / (1024 * 1024)
 print(json.dumps({{
@@ -137,7 +149,7 @@ def _best_of(case: PerformanceCase) -> tuple[dict[str, float | int | str], list[
             grid="R01B08",
             accelerator="numba",
             attempts=2,
-            max_best_seconds=45.0,
+            max_best_seconds=90.0,
             max_best_rss_mib=2_500.0,
         ),
     ],

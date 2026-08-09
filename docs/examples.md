@@ -1,8 +1,9 @@
 # Examples
 
-These complete examples use small grids and write SVG edge plots with
+Most examples use small grids and write SVG edge plots with
 `grid_generator.visualization.write_svg`. The displayed figures correspond to
-the snippets.
+those snippets; the export-first example is intentionally larger and writes only
+NetCDF.
 
 ## Output Directory
 
@@ -58,6 +59,28 @@ grid.to_netcdf(output / "icon_grid_R01B01.nc")
 ```
 
 ![Global R1B1 grid exported to NetCDF](assets/examples/global_r1b1_netcdf.svg)
+
+### Export-first reduced profile
+
+For a global grid that is too large to retain as a complete `IconGrid`, generate
+directly to NetCDF. This example uses the 46-field `reduced` profile and keeps
+resumable checkpoints on disk-backed storage:
+
+```py
+from grid_generator import generate_grid_to_netcdf
+
+generate_grid_to_netcdf(
+    "R2B8",
+    "icon_grid_R02B08.nc",
+    options={"max_cells": None, "accelerator": "numba"},
+    work_dir="icon-grid-R02B08-work",
+    fields="reduced",
+)
+```
+
+The export-first API is global-only and requires the `accelerate` and `netcdf`
+extras at high resolution. See [Performance and Scaling](design.md#performance-and-scaling)
+before selecting a finer grid.
 
 ## Raw Diagnostic Grid
 

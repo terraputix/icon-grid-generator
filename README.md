@@ -23,7 +23,8 @@ The base package requires Python 3.10 or newer and NumPy:
 python -m pip install icon-grid-generator
 ```
 
-Install acceleration and common output integrations for high-resolution work:
+The NetCDF calls in the quick start require the `netcdf` extra. Install
+acceleration and common output integrations for high-resolution work with:
 
 ```bash
 python -m pip install "icon-grid-generator[accelerate,netcdf,xarray]"
@@ -50,26 +51,36 @@ Generate a large global grid directly to NetCDF:
 from grid_generator import generate_grid_to_netcdf
 
 generate_grid_to_netcdf(
-    "R2B12",
-    "icon_grid_R02B12.nc",
+    "R2B8",
+    "icon_grid_R02B08.nc",
     options={"max_cells": None, "accelerator": "numba"},
-    work_dir="icon-grid-R2B12-work",
+    work_dir="icon-grid-R2B08-work",
     fields="reduced",
 )
 ```
+
+This export-first path supports global grids only. `R2B8` is a practical first
+large-grid example at about 9.86 km resolution; check the resource tables before
+requesting finer grids.
 
 The default `full` profile contains 85 fields. `reduced` contains the 46-field
 union required by the standard ICON and icon4py global-grid readers. Dedicated
 `icon` and `icon4py` profiles and exact custom field lists are also available.
 Place large outputs and checkpoint directories on disk-backed storage. Each
 checkpoint manifest atomically selects a complete array snapshot, so an
-interrupted overwrite leaves the preceding completed checkpoint resumable.
+interrupted overwrite leaves the preceding completed checkpoint resumable. The
+final NetCDF file is also published atomically after it closes successfully.
+Allow extra disk headroom when replacing checkpoints or an existing output:
+old and new snapshots/files can coexist temporarily. After a successful export,
+the work directory can be deleted unless it is being kept for a later resume.
 
 ## Performance
 
 Measurements used an exclusive dual-socket AMD EPYC 7713 node with 128 physical
 cores and about 446 GiB of available memory. Times cover independent generation
 and uncompressed NetCDF export; shared-filesystem I/O varies with storage load.
+`R2B12` has approximately 0.616 km resolution and is the largest standard R2
+grid whose one-based exported identifiers fit signed 32-bit integers.
 
 | R2B12 output | Generation | NetCDF export | Total | Peak RSS | Checkpoints | NetCDF |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

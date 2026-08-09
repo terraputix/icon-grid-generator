@@ -35,19 +35,20 @@ memory, use the export-first `generate_grid_to_netcdf` path:
 from grid_generator import generate_grid_to_netcdf
 
 generate_grid_to_netcdf(
-    "R2B12",
-    "icon_grid_R02B12.nc",
+    "R2B8",
+    "icon_grid_R02B08.nc",
     options={"max_cells": None, "accelerator": "numba"},
     chunk_size=1_000_000,
-    work_dir="icon-grid-R2B12-work",
+    work_dir="icon-grid-R2B08-work",
     fields="reduced",
 )
 ```
 
 This global-only path keeps compact staged topology, checkpoints completed
-bisection levels, and writes export-only fields in bounded chunks. Publication
-is atomic: the requested output name appears only after the NetCDF file closes
-successfully. High-resolution streaming requires the `accelerate` extra. The
+bisection levels, and writes export-only fields in bounded chunks. New output is
+published atomically only after the NetCDF file closes successfully; an existing
+output remains in place until then. High-resolution streaming requires the
+`accelerate` extra. The
 optional-dependency-free NumPy fallback remains available through
 `generate_grid` for grids that fit in memory.
 
@@ -60,6 +61,20 @@ Checkpoint manifests atomically select immutable array snapshots; an interrupted
 overwrite therefore leaves the preceding completed snapshot resumable.
 If writing fails, the requested output is not published; the `.partial` file is
 left in place for diagnosis.
+
+Allow capacity beyond the completed sizes in the resource tables. Replacing a
+checkpoint temporarily retains both snapshots, and replacing an existing output
+temporarily retains both the old file and the new `.partial` file. Successful
+checkpoint directories can be deleted unless they are needed to resume or extend
+the same configuration. Use distinct output and work-directory paths for
+concurrent jobs.
+
+The in-memory base stage is selected by cell count, not by the spelling of the
+`R<n>B<k>` decomposition. By default the largest stage with at most 1,310,720
+cells is built as an `IconGrid`, then later stages use compact refinement. If the
+unrefined `B0` root already exceeds that budget, export-first generation rejects
+the request. Use a smaller-root decomposition when the same frequency permits
+it, or use the in-memory workflow with sufficient memory.
 
 ### NetCDF field profiles
 
@@ -91,11 +106,13 @@ grid.to_netcdf(
 )
 ```
 
-Such a custom file is only as compatible as the selected fields. Dimensions
-and global metadata are retained, and dangling `bounds` or `coordinates`
-attributes are removed. Reduced exports also skip avoidable bounds, Cartesian,
-placeholder, hierarchy, and connectivity work for omitted fields rather than
-materializing the complete schema first.
+Such a custom file is only as compatible as the selected fields. Dimensions,
+identity, and configuration metadata are retained, and dangling `bounds` or
+`coordinates` attributes are removed. On the export-first path, metric-summary
+attributes are emitted only when the selected fields require those metrics;
+computing omitted metrics would defeat exact field selection. Reduced exports
+also skip avoidable bounds, Cartesian, placeholder, hierarchy, and connectivity
+work rather than materializing the complete schema first.
 
 ## Grid Specifications
 

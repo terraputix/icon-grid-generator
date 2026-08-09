@@ -103,7 +103,7 @@ def test_streamed_global_netcdf_matches_in_memory_export(monkeypatch, tmp_path):
     reference_path = generate_grid("R01B02", options).to_netcdf(
         tmp_path / "reference.nc"
     )
-    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_BISECTION", 1)
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 80)
     streamed_path = generate_grid_to_netcdf(
         "R01B02",
         tmp_path / "streamed.nc",
@@ -164,7 +164,7 @@ def test_streamed_netcdf_field_selection_matches_in_memory_export(
         tmp_path / "reference.nc",
         fields=fields,
     )
-    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_BISECTION", 0)
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 20)
     streamed_path = generate_grid_to_netcdf(
         "R01B01",
         tmp_path / "streamed.nc",
@@ -218,6 +218,12 @@ def test_custom_streamed_mesh_fields_skip_cell_and_edge_center_construction(
 
     with netcdf4.Dataset(output) as dataset:
         assert list(dataset.variables) == ["vlon", "vlat", "vertex_of_cell"]
+        assert {
+            "mean_cell_area",
+            "mean_dual_cell_area",
+            "mean_edge_length",
+            "mean_dual_edge_length",
+        }.isdisjoint(dataset.ncattrs())
 
 
 def test_streamed_generation_rejects_non_global_grid(tmp_path):
@@ -228,12 +234,38 @@ def test_streamed_generation_rejects_non_global_grid(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    ("spec", "expected_base_bisection"),
+    [
+        (GlobalGridSpec(root=2, bisections=12), 7),
+        (GlobalGridSpec(root=32, bisections=8), 3),
+        (GlobalGridSpec(root=32, bisections=6), 3),
+    ],
+)
+def test_streamed_base_stage_is_selected_by_cell_count(
+    spec,
+    expected_base_bisection,
+):
+    assert (
+        _streaming._in_memory_base_bisection(spec) == expected_base_bisection
+    )
+
+
+def test_streamed_generation_rejects_unbounded_root_stage(tmp_path):
+    with pytest.raises(ValueError, match="cannot bound the initial root stage"):
+        generate_grid_to_netcdf(
+            GlobalGridSpec(root=257, bisections=0),
+            tmp_path / "grid.nc",
+            {"max_cells": None},
+        )
+
+
 def test_streamed_generation_rebuilds_non_exportable_intermediate_checkpoint(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("netCDF4")
     pytest.importorskip("numba")
-    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_BISECTION", 1)
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 80)
     options = {"max_cells": None, "accelerator": "numba"}
     work_dir = tmp_path / "checkpoints"
 
@@ -338,7 +370,7 @@ def test_checkpoint_interruption_preserves_previous_snapshot(monkeypatch, tmp_pa
 def test_streamed_generation_does_not_publish_incomplete_output(monkeypatch, tmp_path):
     pytest.importorskip("netCDF4")
     pytest.importorskip("numba")
-    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_BISECTION", 1)
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 80)
 
     def fail_metrics(*_args, **_kwargs):
         raise RuntimeError("injected metric failure")
@@ -360,7 +392,7 @@ def test_streamed_generation_does_not_publish_incomplete_output(monkeypatch, tmp
 def test_high_resolution_streaming_fails_early_without_accelerator(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_BISECTION", 1)
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 80)
     monkeypatch.setattr(_streaming._accelerated, "should_use_numba", lambda *_: False)
 
     with pytest.raises(ModuleNotFoundError, match="streamed high-resolution"):

@@ -11,10 +11,11 @@ deterministic pipeline:
 5. Build refinement/provenance fields.
 6. Assemble metadata, UUIDs, conversion helpers, and optional NetCDF output.
 
-Very large global grids use an export-first variant: generate a complete base
-through R2B7, refine compact topology stage by stage, checkpoint each completed
-stage on disk, and construct NetCDF-only fields in bounded groups. This path
-returns the output `Path` rather than a complete `IconGrid`.
+Very large global grids use an export-first variant: generate the largest base
+stage with at most 1,310,720 cells (R2B7 for the standard R2 family), refine
+compact topology stage by stage, checkpoint each completed stage on disk, and
+construct NetCDF-only fields in bounded groups. This path returns the output
+`Path` rather than a complete `IconGrid`.
 
 ## Compatibility Contracts
 
@@ -241,6 +242,30 @@ coordinate bounds, connectivity, metrics, Cartesian, placeholder, and hierarchy
 computations. At R2B12, reduced output uses 54% less export time, 38% less total
 time, and 54% less final storage than full output.
 
+### R2B12 component breakdown
+
+The full-output run above recorded the following major components. Small
+components are grouped so the table remains operational rather than specific
+to the profiling tool.
+
+| Phase | Component | Time | Share of phase |
+| --- | --- | ---: | ---: |
+| Generation | Spring relaxation | 37.79 min | 86.9% |
+| Generation | All other generation and checkpoint work | 5.72 min | 13.1% |
+| Export | Coordinates and bounds | 29.42 min | 32.2% |
+| Export | Metrics | 22.79 min | 25.0% |
+| Export | Connectivity | 15.86 min | 17.4% |
+| Export | Cartesian fields | 14.48 min | 15.9% |
+| Export | Hierarchy, refinement, placeholders, and overhead | 8.69 min | 9.5% |
+
+Compact topology establishes a roughly 302 GiB generation memory floor at
+R2B12. Constructing export connectivity raises peak RSS to 328.18 GiB. Spring
+relaxation therefore dominates generation time, while coordinates, metrics,
+connectivity, and Cartesian fields dominate full export. Field selection is the
+strongest practical runtime and storage lever because it skips whole export
+groups; it does not change the compact topology floor. Signed 32-bit identifiers
+make R2B12 the hard ceiling for the standard R2 family.
+
 ### Storage by field profile
 
 These representative cases compare measured uncompressed files. Full and
@@ -293,4 +318,8 @@ Numba is unavailable.
 The export-first path is global-only and requires Numba above its in-memory base
 stage. `generate_grid()` retains the NumPy path for in-memory work. By default,
 checkpoints live beside the output; large jobs require disk-backed output and
-checkpoint locations rather than a memory-backed temporary filesystem.
+checkpoint locations rather than a memory-backed temporary filesystem. Atomic
+replacement can temporarily retain both checkpoint snapshots or both the old
+and new NetCDF files, so provision more than the completed logical sizes. A
+successful work directory can be removed when no later resume or extension is
+needed.

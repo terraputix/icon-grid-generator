@@ -758,9 +758,18 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypa
     # Exercise the large-work kernels on a small fixture without raising the
     # production threshold or making the test allocate an operational grid.
     monkeypatch.setattr(_accelerated, "AUTO_NUMBA_MIN_LOOKUP_ROWS", 0)
-    numpy_grid = generate_grid("R02B02", options={"accelerator": "numpy"})
-    numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
-    repeated_numba_grid = generate_grid("R02B02", options={"accelerator": "numba"})
+    numpy_grid = generate_grid(
+        "R02B02",
+        options={"accelerator": "numpy", "spring_iterations": 20},
+    )
+    numba_grid = generate_grid(
+        "R02B02",
+        options={"accelerator": "numba", "spring_iterations": 20},
+    )
+    repeated_numba_grid = generate_grid(
+        "R02B02",
+        options={"accelerator": "numba", "spring_iterations": 20},
+    )
 
     assert np.array_equal(numba_grid.cells, numpy_grid.cells)
     assert np.array_equal(numba_grid.edges, numpy_grid.edges)
@@ -878,6 +887,32 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypa
             assert reused is rebuilt
         else:
             assert np.array_equal(reused, rebuilt)
+
+
+def test_numba_global_generation_is_thread_count_deterministic():
+    numba = pytest.importorskip("numba")
+    available_threads = numba.get_num_threads()
+    if available_threads < 2:
+        pytest.skip("Numba runtime exposes only one worker thread")
+
+    try:
+        numba.set_num_threads(1)
+        serial = generate_grid(
+            "R02B03",
+            options={"accelerator": "numba", "spring_iterations": 20},
+        )
+        numba.set_num_threads(min(4, available_threads))
+        parallel = generate_grid(
+            "R02B03",
+            options={"accelerator": "numba", "spring_iterations": 20},
+        )
+    finally:
+        numba.set_num_threads(available_threads)
+
+    assert serial.metadata["uuidOfHGrid"] == parallel.metadata["uuidOfHGrid"]
+    assert np.array_equal(serial.vertices, parallel.vertices)
+    assert np.array_equal(serial.cell_center_xyz, parallel.cell_center_xyz)
+    assert np.array_equal(serial.edge_center_xyz, parallel.edge_center_xyz)
 
 
 def test_fused_global_orientation_rejects_degenerate_edges(monkeypatch):

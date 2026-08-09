@@ -10,11 +10,10 @@ public API documented in `README.md` and `docs/api.md`.
   facade, metadata, UUIDs, and shared geometry/connectivity helpers.
 - `src/grid_generator/_global.py`, `_geometry.py`, `_topology.py`,
   `_metrics.py`, `_refinement.py`: spherical grid pipeline.
-- `src/grid_generator/_netcdf.py`, `_io.py`: ICON-style NetCDF field assembly
-  and writing boundary.
+- `src/grid_generator/_netcdf.py`, `_io.py`: ICON-style NetCDF schema,
+  field-profile selection, assembly, and writing boundary.
 - `src/grid_generator/_streaming.py`: export-first high-resolution global-grid
-  generation, disk-backed checkpoints, field-profile selection, and bounded
-  NetCDF serialization.
+  generation, disk-backed checkpoints, and bounded NetCDF serialization.
 - `src/grid_generator/_torus.py`, `_planar.py`, `_limited_area.py`: planar and
   regional variants.
 - `src/grid_generator/cutting.py`: public cutting import surface; implementation
@@ -61,6 +60,8 @@ public API documented in `README.md` and `docs/api.md`.
 ## Design Constraints
 
 - Preserve deterministic output for identical specs and options.
+- Keep accelerated reductions reproducible across supported Numba thread counts;
+  thread scheduling is not part of grid identity.
 - Validate public inputs before expensive generation.
 - Keep the root import surface small. Advanced helpers such as `CutGridSpec` and
   `cut_grid` are exported from focused submodules, not from `grid_generator`.
@@ -77,6 +78,10 @@ public API documented in `README.md` and `docs/api.md`.
 - Keep large-grid checkpoints and partial outputs beside the requested output
   or in an explicit disk-backed work directory. Do not default them to a system
   temporary directory, which may be memory-backed on target systems.
+- Select the export-first in-memory base stage by actual cell count, not only by
+  the `B` value. Root-heavy and bisection-heavy spellings can have equal size.
+- Treat an output path and work directory as single-writer resources. Concurrent
+  jobs must use distinct paths.
 - Geometry/topology changes must test counts, bounds, adjacency, finite numeric
   fields, and relevant metadata.
 - UUID behavior is a compatibility contract.
@@ -107,13 +112,16 @@ For packaging or release-facing changes, also run:
 make package
 ```
 
-For docs-only changes, `make docs` is sufficient. If `make` is unavailable, use
-the commands in the `Makefile` directly.
+Use `make docs` for focused documentation iteration, but run `make check` before
+handoff; it also verifies generated documentation figures and repository drift.
+If `make` is unavailable, use the commands in the `Makefile` directly.
 
 Run `make perf-check` after performance-sensitive grid-generation changes. It
 uses ignored local subprocess benchmarks and is intentionally not part of the
 default check because timings are hardware- and load-dependent. The
 `accelerate` extra is required for the large-grid path these checks protect.
+The streamed case defaults to ignored `profiling/` storage; set
+`GRID_GENERATOR_PERF_WORK_DIR` to explicit disk-backed scratch when needed.
 
 If a change touches public specs, `generate_grid()`, `IconGrid`, NetCDF export,
 metadata, UUIDs, or examples, update the matching README/docs/API text and tests

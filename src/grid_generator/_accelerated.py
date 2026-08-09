@@ -22,6 +22,10 @@ SUPPORTED_ACCELERATORS = {
 }
 AUTO_NUMBA_MIN_LOOKUP_ROWS = 1_000_000
 AUTO_NUMBA_MIN_ORDER_CELLS = 100_000
+# Fixed partitions keep floating-point accumulation order independent of the
+# number of Numba worker threads.
+DETERMINISTIC_SPRING_REDUCTION_BLOCK_SIZE = 256
+DETERMINISTIC_EDGE_REDUCTION_BLOCK_SIZE = 65_536
 
 
 def is_numba_available() -> bool:
@@ -1348,6 +1352,11 @@ def _compiled_spring_relaxation():
         max_ekin = 0.0
         max_test = 0.0
         completed_iterations = 0
+        reduction_block_count = (
+            vertices.shape[0] + DETERMINISTIC_SPRING_REDUCTION_BLOCK_SIZE - 1
+        ) // DETERMINISTIC_SPRING_REDUCTION_BLOCK_SIZE
+        block_ekin = np.empty(reduction_block_count, dtype=np.float64)
+        block_test = np.empty(reduction_block_count, dtype=np.float64)
 
         for iteration in range(1, maxit + 1):
             if iteration <= 50:
@@ -1400,44 +1409,58 @@ def _compiled_spring_relaxation():
                     spring[vertex, 1] = 0.0
                     spring[vertex, 2] = 0.0
 
+            for block in prange(reduction_block_count):
+                start = block * DETERMINISTIC_SPRING_REDUCTION_BLOCK_SIZE
+                stop = min(
+                    start + DETERMINISTIC_SPRING_REDUCTION_BLOCK_SIZE,
+                    vertices.shape[0],
+                )
+                local_ekin = 0.0
+                local_test = 0.0
+                for vertex in range(start, stop):
+                    if movable[vertex]:
+                        x = vertices[vertex, 0] + dt * velocity[vertex, 0]
+                        y = vertices[vertex, 1] + dt * velocity[vertex, 1]
+                        z = vertices[vertex, 2] + dt * velocity[vertex, 2]
+                        norm = np.sqrt(x * x + y * y + z * z)
+                        x /= norm
+                        y /= norm
+                        z /= norm
+                        vertices[vertex, 0] = x
+                        vertices[vertex, 1] = y
+                        vertices[vertex, 2] = z
+
+                        vx = (1.0 - dt) * velocity[vertex, 0] + dt * spring[vertex, 0]
+                        vy = (1.0 - dt) * velocity[vertex, 1] + dt * spring[vertex, 1]
+                        vz = (1.0 - dt) * velocity[vertex, 2] + dt * spring[vertex, 2]
+                        radial = vx * x + vy * y + vz * z
+                        vx -= radial * x
+                        vy -= radial * y
+                        vz -= radial * z
+                        velocity[vertex, 0] = vx
+                        velocity[vertex, 1] = vy
+                        velocity[vertex, 2] = vz
+                        local_ekin += 0.5 * (vx * vx + vy * vy + vz * vz)
+                        local_test += (
+                            spring[vertex, 0] * spring[vertex, 0]
+                            + spring[vertex, 1] * spring[vertex, 1]
+                            + spring[vertex, 2] * spring[vertex, 2]
+                        )
+                    elif not all_movable:
+                        vertices[vertex, 0] = fixed_vertices[vertex, 0]
+                        vertices[vertex, 1] = fixed_vertices[vertex, 1]
+                        vertices[vertex, 2] = fixed_vertices[vertex, 2]
+                        velocity[vertex, 0] = 0.0
+                        velocity[vertex, 1] = 0.0
+                        velocity[vertex, 2] = 0.0
+                block_ekin[block] = local_ekin
+                block_test[block] = local_test
+
             ekin = 0.0
             test = 0.0
-            for vertex in prange(vertices.shape[0]):
-                if movable[vertex]:
-                    x = vertices[vertex, 0] + dt * velocity[vertex, 0]
-                    y = vertices[vertex, 1] + dt * velocity[vertex, 1]
-                    z = vertices[vertex, 2] + dt * velocity[vertex, 2]
-                    norm = np.sqrt(x * x + y * y + z * z)
-                    x /= norm
-                    y /= norm
-                    z /= norm
-                    vertices[vertex, 0] = x
-                    vertices[vertex, 1] = y
-                    vertices[vertex, 2] = z
-
-                    vx = (1.0 - dt) * velocity[vertex, 0] + dt * spring[vertex, 0]
-                    vy = (1.0 - dt) * velocity[vertex, 1] + dt * spring[vertex, 1]
-                    vz = (1.0 - dt) * velocity[vertex, 2] + dt * spring[vertex, 2]
-                    radial = vx * x + vy * y + vz * z
-                    vx -= radial * x
-                    vy -= radial * y
-                    vz -= radial * z
-                    velocity[vertex, 0] = vx
-                    velocity[vertex, 1] = vy
-                    velocity[vertex, 2] = vz
-                    ekin += 0.5 * (vx * vx + vy * vy + vz * vz)
-                    test += (
-                        spring[vertex, 0] * spring[vertex, 0]
-                        + spring[vertex, 1] * spring[vertex, 1]
-                        + spring[vertex, 2] * spring[vertex, 2]
-                    )
-                elif not all_movable:
-                    vertices[vertex, 0] = fixed_vertices[vertex, 0]
-                    vertices[vertex, 1] = fixed_vertices[vertex, 1]
-                    vertices[vertex, 2] = fixed_vertices[vertex, 2]
-                    velocity[vertex, 0] = 0.0
-                    velocity[vertex, 1] = 0.0
-                    velocity[vertex, 2] = 0.0
+            for block in range(reduction_block_count):
+                ekin += block_ekin[block]
+                test += block_test[block]
 
             completed_iterations = iteration
             if ekin > max_ekin:
@@ -1459,20 +1482,34 @@ def _compiled_mean_edge_angle():
 
     @njit(parallel=True)
     def compute(vertices, edges):
-        angle_sum = 0.0
-        for edge in prange(edges.shape[0]):
-            first = edges[edge, 0]
-            second = edges[edge, 1]
-            dot = (
-                vertices[first, 0] * vertices[second, 0]
-                + vertices[first, 1] * vertices[second, 1]
-                + vertices[first, 2] * vertices[second, 2]
+        block_count = (
+            edges.shape[0] + DETERMINISTIC_EDGE_REDUCTION_BLOCK_SIZE - 1
+        ) // DETERMINISTIC_EDGE_REDUCTION_BLOCK_SIZE
+        block_sums = np.empty(block_count, dtype=np.float64)
+        for block in prange(block_count):
+            start = block * DETERMINISTIC_EDGE_REDUCTION_BLOCK_SIZE
+            stop = min(
+                start + DETERMINISTIC_EDGE_REDUCTION_BLOCK_SIZE,
+                edges.shape[0],
             )
-            if dot < -1.0:
-                dot = -1.0
-            elif dot > 1.0:
-                dot = 1.0
-            angle_sum += np.arccos(dot)
+            local_sum = 0.0
+            for edge in range(start, stop):
+                first = edges[edge, 0]
+                second = edges[edge, 1]
+                dot = (
+                    vertices[first, 0] * vertices[second, 0]
+                    + vertices[first, 1] * vertices[second, 1]
+                    + vertices[first, 2] * vertices[second, 2]
+                )
+                if dot < -1.0:
+                    dot = -1.0
+                elif dot > 1.0:
+                    dot = 1.0
+                local_sum += np.arccos(dot)
+            block_sums[block] = local_sum
+        angle_sum = 0.0
+        for block in range(block_count):
+            angle_sum += block_sums[block]
         return angle_sum / edges.shape[0]
 
     return compute

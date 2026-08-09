@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Make accelerated spring reductions deterministic across Numba thread counts,
+  preserving byte-identical geometry for one grid identity.
+- Select export-first base stages by cell count so root-heavy global specs do not
+  unexpectedly fall back to complete in-memory export.
+- Clarify custom streamed metadata, transient disk headroom, checkpoint cleanup,
+  safe large-grid examples, and component-level R2B12 performance behavior.
+- Keep performance scratch data on workspace or explicitly configured disk-backed
+  storage and exclude temporary-file cleanup from measured generation time.
+
 ## 0.6.1 - 2026-08-09
 
 - Consolidate API and performance documentation, correct benchmark rounding,
