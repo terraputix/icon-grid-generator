@@ -91,6 +91,9 @@ def _generate_staged_global_grid(
         parent.vertices,
         parent.cells,
         options.accelerator,
+        edge_vertices=parent.edges,
+        cell_edges=parent.cell_edges,
+        edge_cells=parent.edge_cells,
     )
     vertices = vertices * options.radius
     geometry = _geometry_from_vertices(spec, options, vertices, cells, provenance)
@@ -288,47 +291,87 @@ def _adjust_global_edge_orientation(
             options.accelerator,
         )
 
-    edge_system_orientation = _gg()._edge_system_orientation(
-        geometry.vertices,
-        geometry.cell_center_xyz,
-        topology.edges,
-        topology.edge_cells,
-        topology.edge_center_xyz,
-    )
-    child_normals = _gg()._edge_normal_fields(
-        geometry.vertices,
-        topology.edges,
-        topology.edge_center_xyz,
-        edge_system_orientation,
-    )["edge_primal_normal_cartesian"]
-    alignment = np.sum(
-        child_normals * parent_normals[parent_edge_index.astype(np.int64) - 1],
-        axis=1,
-    )
-    flip = alignment < 0.0
-    if not np.any(flip):
-        return topology
-
-    edges = topology.edges.copy()
-    edge_cells = topology.edge_cells.copy()
-    edges[flip] = edges[flip][:, ::-1]
-    edge_cells[flip] = edge_cells[flip][:, ::-1]
-
-    edge_center_xyz = _gg()._edge_centers(
-        geometry.vertices,
-        edges,
-        options.radius,
-        options.accelerator,
-    )
-    edge_lon, edge_lat = _gg()._lon_lat(edge_center_xyz)
     icon_connectivity = dict(topology.icon_connectivity)
-    orientation_of_normal = icon_connectivity["orientation_of_normal"].copy()
-    orientation_of_normal[flip[topology.cell_edges]] *= -1
+    if _accelerated.should_use_numba_large(
+        options.accelerator,
+        topology.edges.shape[0],
+    ):
+        states, degenerate_count, flip_count = (
+            _accelerated.global_edge_orientation_states_numba(
+                geometry.vertices,
+                geometry.cell_center_xyz,
+                topology.edges,
+                topology.edge_cells,
+                topology.edge_center_xyz,
+                parent_normals,
+                parent_edge_index,
+            )
+        )
+        if degenerate_count:
+            raise RuntimeError(
+                "edge system orientation is degenerate for at least one edge"
+            )
+        if not flip_count:
+            return topology
+        (
+            edges,
+            edge_cells,
+            orientation_of_normal,
+            edge_orientation,
+        ) = _accelerated.apply_global_edge_flips_numba(
+            topology.edges,
+            topology.edge_cells,
+            icon_connectivity["orientation_of_normal"],
+            icon_connectivity["edge_orientation"],
+            topology.cell_edges,
+            icon_connectivity["v2e"],
+            states,
+        )
+        # Reversing an edge changes its orientation, not its geometric center.
+        edge_center_xyz = topology.edge_center_xyz
+        edge_lon = topology.edge_lon
+        edge_lat = topology.edge_lat
+    else:
+        edge_system_orientation = _gg()._edge_system_orientation(
+            geometry.vertices,
+            geometry.cell_center_xyz,
+            topology.edges,
+            topology.edge_cells,
+            topology.edge_center_xyz,
+        )
+        child_normals = _gg()._edge_normal_fields(
+            geometry.vertices,
+            topology.edges,
+            topology.edge_center_xyz,
+            edge_system_orientation,
+        )["edge_primal_normal_cartesian"]
+        alignment = np.sum(
+            child_normals * parent_normals[parent_edge_index.astype(np.int64) - 1],
+            axis=1,
+        )
+        flip = alignment < 0.0
+        if not np.any(flip):
+            return topology
+
+        edges = topology.edges.copy()
+        edge_cells = topology.edge_cells.copy()
+        edges[flip] = edges[flip][:, ::-1]
+        edge_cells[flip] = edge_cells[flip][:, ::-1]
+        edge_center_xyz = _gg()._edge_centers(
+            geometry.vertices,
+            edges,
+            options.radius,
+            options.accelerator,
+        )
+        edge_lon, edge_lat = _gg()._lon_lat(edge_center_xyz)
+        orientation_of_normal = icon_connectivity["orientation_of_normal"].copy()
+        orientation_of_normal[flip[topology.cell_edges]] *= -1
+        edge_orientation = icon_connectivity["edge_orientation"].copy()
+        active_incidence = icon_connectivity["v2e"] > 0
+        flipped_incidence = flip[np.maximum(icon_connectivity["v2e"] - 1, 0)]
+        edge_orientation[active_incidence & flipped_incidence] *= -1
+
     icon_connectivity["orientation_of_normal"] = orientation_of_normal
-    edge_orientation = icon_connectivity["edge_orientation"].copy()
-    active_incidence = icon_connectivity["v2e"] > 0
-    flipped_incidence = flip[np.maximum(icon_connectivity["v2e"] - 1, 0)]
-    edge_orientation[active_incidence & flipped_incidence] *= -1
     icon_connectivity["edge_orientation"] = edge_orientation
 
     connectivity = dict(topology.connectivity)

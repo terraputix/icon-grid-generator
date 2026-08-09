@@ -1471,6 +1471,10 @@ def _refine_triangles_bisection_with_provenance(
     vertices: np.ndarray,
     cells: np.ndarray,
     accelerator: str = "auto",
+    *,
+    edge_vertices: np.ndarray | None = None,
+    cell_edges: np.ndarray | None = None,
+    edge_cells: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, BisectionProvenance]:
     """Split triangles into ICON-ordered bisection children and provenance."""
     use_compiled_fill = _accelerated.should_use_numba_ordering(
@@ -1481,7 +1485,40 @@ def _refine_triangles_bisection_with_provenance(
         use_compiled_fill
         and cells.shape[0] * 4 >= _accelerated.AUTO_NUMBA_MIN_ORDER_CELLS
     )
-    if use_compiled_edge_build:
+    topology_arguments = (edge_vertices, cell_edges, edge_cells)
+    if any(value is None for value in topology_arguments) and not all(
+        value is None for value in topology_arguments
+    ):
+        raise ValueError(
+            "edge_vertices, cell_edges, and edge_cells must be supplied together"
+        )
+    reuse_topology = (
+        edge_vertices is not None
+        and cell_edges is not None
+        and edge_cells is not None
+        and _accelerated.should_use_numba_large(accelerator, cells.shape[0])
+    )
+    if edge_vertices is not None and cell_edges is not None and edge_cells is not None:
+        edge_vertices = np.asarray(edge_vertices, dtype=np.int32)
+        cell_edges = np.asarray(cell_edges, dtype=np.int32)
+        edge_cells = np.asarray(edge_cells, dtype=np.int32)
+        if cell_edges.shape != cells.shape:
+            raise ValueError("cell_edges must have the same shape as cells")
+        if edge_vertices.ndim != 2 or edge_vertices.shape[1] != 2:
+            raise ValueError("edge_vertices must have shape (edge, 2)")
+        if edge_cells.shape != edge_vertices.shape:
+            raise ValueError("edge_cells must have the same shape as edge_vertices")
+    if reuse_topology:
+        edge_vertices, cell_edges, emitted_count = (
+            _accelerated.reindex_closed_topology_for_refinement_numba(
+                cells,
+                cell_edges,
+                edge_cells,
+            )
+        )
+        if emitted_count != edge_vertices.shape[0]:
+            raise RuntimeError("existing topology does not describe a closed triangular grid")
+    elif use_compiled_edge_build:
         (
             edge_vertices,
             cell_edges,

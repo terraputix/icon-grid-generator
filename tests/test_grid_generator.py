@@ -720,6 +720,16 @@ def test_numba_accelerator_is_optional_and_matches_numpy_when_available(monkeypa
         np.array_equal(actual, expected)
         for actual, expected in zip(compiled_edges[:3], expected_edges, strict=True)
     )
+    reindexed_edges, reindexed_cell_edges, emitted_count = (
+        _accelerated.reindex_closed_topology_for_refinement_numba(
+            numba_grid.cells,
+            numba_grid.cell_edges,
+            numba_grid.edge_cells,
+        )
+    )
+    assert emitted_count == expected_edges[0].shape[0]
+    assert np.array_equal(reindexed_edges, expected_edges[0])
+    assert np.array_equal(reindexed_cell_edges, expected_edges[1])
 
 
 
