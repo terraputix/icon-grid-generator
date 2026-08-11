@@ -645,51 +645,37 @@ def _spherical_metrics(
             grid.options.sphere_radius,
             grid.options.accelerator,
         )
-    cell_areas = gg._cell_areas(vertices, grid.cells, grid.options.sphere_radius)
-    edge_lengths = gg._edge_lengths(vertices, grid.edges, grid.options.sphere_radius)
-    edge_cell_distance = _open_edge_cell_distances(
-        cell_center_xyz,
-        grid.edge_cells,
-        edge_center_xyz,
-        grid.options.sphere_radius,
+    metric_cells = grid.edge_cells.copy()
+    missing_edge, missing_side = np.nonzero(metric_cells < 0)
+    metric_cells[missing_edge, missing_side] = (
+        cell_center_xyz.shape[0] + np.arange(missing_edge.size, dtype=np.int32)
     )
-    dual_edge_lengths = edge_cell_distance.sum(axis=1)
-    boundary = grid.edge_cells[:, 1] < 0
-    dual_edge_lengths[boundary] = 2.0 * edge_cell_distance[boundary, 0]
-    edge_system_orientation = np.ones(grid.edges.shape[0], dtype=np.int32)
-    normals = gg._edge_normal_fields(vertices, grid.edges, edge_center_xyz, edge_system_orientation)
-    return {
-        "cell_area": cell_areas,
-        "dual_area": gg._dual_areas(vertices.shape[0], grid.cells, cell_areas),
-        "edge_length": edge_lengths,
-        "dual_edge_length": dual_edge_lengths,
-        "edge_cell_distance": edge_cell_distance,
-        "edge_vert_distance": np.column_stack((edge_lengths * 0.5, edge_lengths * 0.5)),
-        "orientation_of_normal": grid.icon_connectivity["orientation_of_normal"],
-        "edge_system_orientation": edge_system_orientation,
-        "edge_orientation": grid.icon_connectivity["edge_orientation"],
-        "edgequad_area": 0.5 * edge_lengths * dual_edge_lengths,
-        **normals,
-    }
-
-
-def _open_edge_cell_distances(
-    cell_center_xyz: np.ndarray,
-    edge_cells: np.ndarray,
-    edge_center_xyz: np.ndarray,
-    sphere_radius: float,
-) -> np.ndarray:
-    from . import grid_generator as gg
-
-    edge_centers = gg._normalize_rows(edge_center_xyz)
-    cell_centers = gg._normalize_rows(cell_center_xyz)
-    distances = np.zeros((edge_cells.shape[0], 2), dtype=np.float64)
-    for edge_index, adjacent in enumerate(edge_cells):
-        for side in range(2):
-            cell = int(adjacent[side])
-            if cell < 0:
-                distances[edge_index, side] = distances[edge_index, 0]
-                continue
-            dot = float(np.dot(cell_centers[cell], edge_centers[edge_index]))
-            distances[edge_index, side] = np.arccos(np.clip(dot, -1.0, 1.0)) * sphere_radius
-    return distances
+    augmented_centers = np.vstack((cell_center_xyz, edge_center_xyz[missing_edge]))
+    fields = gg._geometry_fields(
+        vertices,
+        grid.cells,
+        augmented_centers,
+        grid.edges,
+        metric_cells,
+        edge_center_xyz,
+        grid.icon_connectivity,
+        grid.options.sphere_radius,
+        grid.options.accelerator,
+    )
+    fields["edge_cell_distance"][missing_edge, missing_side] = 0.0
+    if grid.metadata.get("boundary_metric_closure") == "mirrored":
+        boundary = grid.edge_cells[:, 1] < 0
+        fields["dual_edge_length"][boundary] *= 2.0
+        fields["edge_cell_distance"][boundary, 1] = fields[
+            "edge_cell_distance"
+        ][boundary, 0]
+        fields["edgequad_area"] = (
+            0.5 * fields["edge_length"] * fields["dual_edge_length"]
+        )
+        fields["dual_area"] = gg._dual_areas_from_edges(
+            vertices.shape[0],
+            grid.icon_connectivity["v2e"],
+            fields["edge_length"],
+            fields["dual_edge_length"],
+        )
+    return fields

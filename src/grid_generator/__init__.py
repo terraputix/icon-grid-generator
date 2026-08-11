@@ -6,8 +6,10 @@ from .grid_generator import (
     IconGrid,
     IconGridOptions,
     LimitedAreaGridSpec,
+    OpenBoundaryOptions,
     ParallelogramGridSpec,
     Region,
+    RegionSelectionOptions,
     TorusGridSpec,
     generate_grid,
     generate_grid_to_netcdf,
@@ -23,5 +25,7 @@ __all__ = [
     "ChannelGridSpec",
     "ParallelogramGridSpec",
     "LimitedAreaGridSpec",
+    "RegionSelectionOptions",
+    "OpenBoundaryOptions",
     "Region",
 ]

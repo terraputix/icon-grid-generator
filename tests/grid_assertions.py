@@ -46,7 +46,7 @@ def assert_valid_grid_math(
         assert grid.metadata["grid_geometry"] == 3
         assert np.all(grid.refinement["parent_cell_index"] > 0)
         assert np.all(grid.refinement["parent_edge_index"] > 0)
-        assert np.all(grid.refinement["parent_vertex_index"] > 0)
+        assert np.all(grid.refinement["parent_vertex_index"] != 0)
 
 
 def assert_same_topology(left: Any, right: Any) -> None:

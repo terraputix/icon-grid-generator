@@ -54,6 +54,11 @@ def check_grid(grid: Any) -> GridCheckResult:
     for name in ["vertices", "cell_center_xyz", "edge_center_xyz"]:
         if not np.all(np.isfinite(getattr(grid, name))):
             errors.append(f"{name} contains non-finite values")
+    for name, values in getattr(grid, "geometry", {}).items():
+        if np.asarray(values).dtype.kind in {"f", "c"} and not np.all(
+            np.isfinite(values)
+        ):
+            errors.append(f"geometry field {name} contains non-finite values")
     if np.any((grid.cells < 0) | (grid.cells >= grid.dims["vertex"])):
         errors.append("cells contain out-of-range vertex indices")
     if np.any((grid.edges < 0) | (grid.edges >= grid.dims["vertex"])):
@@ -67,6 +72,24 @@ def check_grid(grid: Any) -> GridCheckResult:
         errors.append("edges contain duplicate vertex pairs")
     if np.any(grid.edge_cells[:, 1] < 0):
         warnings.append("grid has open boundary edges")
+        if np.any(grid.edge_cells[:, 0] < 0):
+            errors.append("open boundary edges must store their real cell first")
+        refinement = getattr(grid, "refinement", {})
+        for name, dimension in (
+            ("refin_c_ctrl", "cell"),
+            ("refin_e_ctrl", "edge"),
+            ("refin_v_ctrl", "vertex"),
+        ):
+            if name in refinement and np.asarray(refinement[name]).shape != (
+                grid.dims[dimension],
+            ):
+                errors.append(f"{name} has the wrong shape")
+        boundary_edges = grid.edge_cells[:, 1] < 0
+        if "edge_cell_distance" in getattr(grid, "geometry", {}):
+            distances = np.asarray(grid.geometry["edge_cell_distance"])
+            closure = getattr(grid, "metadata", {}).get("boundary_metric_closure")
+            if closure == "clipped" and np.any(distances[boundary_edges, 1] != 0.0):
+                errors.append("clipped boundary has nonzero exterior cell distance")
     else:
         characteristic = grid.dims["vertex"] - grid.dims["edge"] + grid.dims["cell"]
         metadata = getattr(grid, "metadata", {})

@@ -50,6 +50,8 @@ def test_public_package_exports_only_supported_grid_api():
         "ChannelGridSpec",
         "ParallelogramGridSpec",
         "LimitedAreaGridSpec",
+        "RegionSelectionOptions",
+        "OpenBoundaryOptions",
         "Region",
     ]
     assert "write_icon_grid" not in grid_generator_package.__all__

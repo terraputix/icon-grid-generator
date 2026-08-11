@@ -121,8 +121,10 @@ work rather than materializing the complete schema first.
 
 - `GlobalGridSpec` describes spherical ICON `R<n>B<k>` grids. Strings such as
   `"R2B4"` are shorthand for this common path.
-- `LimitedAreaGridSpec(parent=..., region=..., boundary_depth=...)` extracts a
-  compact regional grid from a generated global parent.
+- `LimitedAreaGridSpec(parent=..., region=..., selection=..., boundary=...)`
+  selects at the preceding global bisection level and refines the compact
+  region once by default. `construction="cut_final"` selects directly from the
+  requested final-resolution parent.
 - `TorusGridSpec` describes planar doubly periodic triangular torus grids.
 - `ChannelGridSpec` describes a planar triangular channel with open boundaries
   in one direction and periodic boundaries in the other.
@@ -142,7 +144,7 @@ from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSp
 | `TorusGridSpec` | `nx`, `ny`, `edge_length`, optional `name` |
 | `ChannelGridSpec` | `nx`, `ny`, `edge_length`, optional `name` |
 | `ParallelogramGridSpec` | `nx`, `ny`, `edge_length`, optional `shear`, `name` |
-| `LimitedAreaGridSpec` | `parent`, `region`, optional `boundary_depth`, `name` |
+| `LimitedAreaGridSpec` | `parent`, `region`, optional `boundary_depth`, `construction`, `selection`, `boundary`, `local_optimization_iterations`, `name` |
 
 Use `generate_grid("R2B4")` for the common global-grid case. Use explicit spec
 objects when the grid family has parameters beyond the standard `R<n>B<k>`
@@ -173,6 +175,17 @@ Use `Region` constructors for limited-area extraction and cutting:
 - `Region.lonlat_box(lon_min=..., lon_max=..., lat_min=..., lat_max=...)`
 - `Region.circle(lon=..., lat=..., radius_degrees=...)`
 - `Region.rectangle(center_lon=..., center_lat=..., width_degrees=..., height_degrees=..., angle_degrees=...)`
+- `Region.rotated_lonlat_box(pole_lon=..., pole_lat=..., center_lon=..., center_lat=..., half_width_lon=..., half_width_lat=...)`
+
+Regional policies are explicit public values:
+
+- `RegionSelectionOptions(inclusion="overlap", cleanup="remove_ears", buffer_rings=0)`
+  controls coverage, mask cleanup, and selection expansion. Use `"center"` or
+  `"none"` for the narrower/raw alternatives.
+- `OpenBoundaryOptions(metric_closure="clipped", indexing_depth=14, ordering="icon")`
+  controls physical versus mirrored dual closure and ICON boundary indexing.
+  Source ordering is intended for in-memory analysis and cannot be exported as
+  a valid ICON regional NetCDF.
 - `Region.polygon(((lon0, lat0), (lon1, lat1), ...))`
 
 Longitudes and latitudes are in degrees. Region predicates select cells by cell
@@ -246,9 +259,10 @@ for tests and visualization.
 
 Planar generation automatically disables the default global optimizer when no
 value was supplied. Passing `optimize_global=True` explicitly for a planar spec
-is rejected; omit it or pass `False`. A `LimitedAreaGridSpec` first generates
-its complete global parent with the same options, so `max_cells`, orientation,
-and global optimization apply to that parent before extraction.
+is rejected; omit it or pass `False`. A default `LimitedAreaGridSpec` generates
+the preceding bisection-level global parent with the same options, compacts the
+selection, and performs the final refinement locally. `max_cells`, orientation,
+and global optimization therefore apply to that construction parent.
 
 `IconGridOptions.fixed_boundary` belongs to the global spring configuration and
 has no practical effect on a closed global mesh. It does not configure
@@ -533,22 +547,27 @@ cut = cut_grid(parent, Region.circle(lon=8.0, lat=47.0, radius_degrees=10.0))
 
 Selection is cell based and deterministic:
 
-- Region predicates test cell centers. Multiple regions are combined by union.
+- The default overlap policy retains cells whose center or any vertex satisfies
+  a region predicate. The center-only policy is available explicitly. Multiple
+  regions are combined by union.
 - `mode="keep"` retains the selected union. `mode="remove"` takes its
   complement.
-- `boundary_depth=N` then adds `N` cell-neighbor rings. On a remove cut, this
+- `RegionSelectionOptions.buffer_rings=N` then adds `N` cell-neighbor rings.
+  `boundary_depth=N` is the backwards-compatible spelling. On a remove cut, this
   expands the retained complement, not the removed region.
 - `smoothing_depth` does **not** move vertices or smooth geometry. It fills the
   ICON `smooth_c_ctrl` refinement field and records the requested depth as
   metadata for downstream consumers.
-- The result is compacted and reordered from boundary cells inward. Use its
+- The result is compacted and given ICON boundary-control ordering. Use its
   parent-index refinement fields to map values back to the source; do not assume
   that a source cell keeps the same local index.
+- Boundary metrics are recomputed. Clipped duals are the default; the mirrored
+  ghost closure is an explicit option.
 - A selection containing no cells raises `ValueError`.
 
 When passing a `CutGridSpec`, put all cut options in that object; supplying the
 same options again as `cut_grid()` keywords is rejected. `LimitedAreaGridSpec`
-supports one region and `boundary_depth`; `cut_grid()` supports multiple
+supports one region and local final refinement; `cut_grid()` supports multiple
 regions, keep/remove mode, and `smoothing_depth` on an existing grid.
 
 ## Diagnostics And Transforms
@@ -634,8 +653,10 @@ The following names are available directly from `grid_generator`:
 - `IconGrid`
 - `IconGridOptions`
 - `LimitedAreaGridSpec`
+- `OpenBoundaryOptions`
 - `ParallelogramGridSpec`
 - `Region`
+- `RegionSelectionOptions`
 - `TorusGridSpec`
 - `generate_grid`
 - `generate_grid_to_netcdf`

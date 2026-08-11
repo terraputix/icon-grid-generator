@@ -10,6 +10,7 @@ import pytest
 
 from grid_generator import (
     GlobalGridSpec,
+    LimitedAreaGridSpec,
     Region,
     TorusGridSpec,
     generate_grid,
@@ -448,6 +449,44 @@ def test_planar_cut_netcdf_retains_physical_edgequad_area(tmp_path):
             grid.geometry["edgequad_area"],
         )
         assert dataset.variables["edgequad_area"].getncattr("units") == "m2"
+        assert np.any(dataset.variables["neighbor_cell_index"][:] == -1)
+        assert np.any(dataset.variables["adjacent_cell_of_edge"][:] == -1)
+        assert np.any(dataset.variables["cells_of_vertex"][:] == -1)
+        assert not np.any(dataset.variables["neighbor_cell_index"][:] == 0)
+
+
+def test_refine_last_limited_area_netcdf_has_icon_boundary_contract(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    grid = generate_grid(
+        LimitedAreaGridSpec(
+            parent="R02B02",
+            region=Region.circle(lon=0.0, lat=0.0, radius_degrees=45.0),
+            local_optimization_iterations=0,
+        ),
+        optimize_global=False,
+    )
+    path = grid.to_netcdf(tmp_path / "limited.nc", fields="full")
+
+    with netcdf4.Dataset(path) as dataset:
+        assert dataset.getncattr("grid_geometry") == 3
+        assert dataset.getncattr("grid_root") == 2
+        assert dataset.getncattr("grid_level") == 2
+        assert dataset.getncattr("boundary_depth_index") == 14
+        assert dataset.getncattr("construction_parent_grid_name") == "R02B01"
+        assert dataset.getncattr("uuidOfParHGrid") == grid.metadata["uuidOfParHGrid"]
+        assert np.any(dataset.variables["neighbor_cell_index"][:] == -1)
+        assert np.any(dataset.variables["adjacent_cell_of_edge"][:] == -1)
+        assert np.array_equal(
+            dataset.variables["refin_c_ctrl"][:],
+            grid.refinement["refin_c_ctrl"],
+        )
+        assert set(np.unique(dataset.variables["parent_cell_type"][:])) == {
+            200,
+            201,
+            202,
+            203,
+        }
+        assert np.any(dataset.variables["parent_vertex_index"][:] < 0)
 
 
 def test_to_netcdf_writes_expected_icon_grid_content(tmp_path):

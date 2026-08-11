@@ -444,6 +444,66 @@ def _require_complete_icon_grid(grid: Any) -> None:
     }.items():
         if not fields:
             raise ValueError(f"ICON NetCDF export requires populated {name}")
+    if grid.metadata.get("grid_geometry") == 3:
+        _require_valid_open_icon_grid(grid)
+
+
+def _require_valid_open_icon_grid(grid: Any) -> None:
+    """Reject regional files that ICON would only fail on after initialization."""
+    if not np.any(grid.edge_cells[:, 1] < 0):
+        raise ValueError("regional ICON grid must contain open boundary edges")
+    if grid.metadata.get("boundary_ordering") != "icon":
+        raise ValueError(
+            "ICON NetCDF export requires boundary ordering 'icon'; "
+            "source ordering is intended for in-memory analysis"
+        )
+    for name in (
+        "cell_area",
+        "dual_area",
+        "edge_length",
+        "dual_edge_length",
+        "edge_cell_distance",
+        "edge_vert_distance",
+        "edgequad_area",
+    ):
+        values = np.asarray(grid.geometry[name])
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"regional ICON metric {name} contains non-finite values")
+    for name in ("cell_area", "dual_area", "edge_length", "dual_edge_length"):
+        if np.any(np.asarray(grid.geometry[name]) <= 0.0):
+            raise ValueError(f"regional ICON metric {name} must be positive")
+    controls = {
+        "c": np.asarray(grid.refinement["refin_c_ctrl"]),
+        "e": np.asarray(grid.refinement["refin_e_ctrl"]),
+        "v": np.asarray(grid.refinement["refin_v_ctrl"]),
+    }
+    maxima = {"c": 5, "e": 10, "v": 5}
+    for key, values in controls.items():
+        order = np.concatenate(
+            [np.flatnonzero(values == level) for level in range(1, maxima[key] + 1)]
+            + [np.flatnonzero((values == 0) | (values > maxima[key]))]
+        )
+        if not np.array_equal(order, np.arange(values.size)):
+            raise ValueError(f"regional ICON refin_{key}_ctrl is not boundary ordered")
+    from ._limited_area import _start_end
+
+    dimensions = {"c": "cell_grf", "e": "edge_grf", "v": "vert_grf"}
+    for key, values in controls.items():
+        expected_start, expected_end = _start_end(values, dimensions[key])
+        if not np.array_equal(grid.refinement[f"start_idx_{key}"], expected_start):
+            raise ValueError(f"regional ICON start_idx_{key} is inconsistent")
+        if not np.array_equal(grid.refinement[f"end_idx_{key}"], expected_end):
+            raise ValueError(f"regional ICON end_idx_{key} is inconsistent")
+    expected_shapes = {
+        "parent_cell_index": (grid.dims["cell"],),
+        "parent_cell_type": (grid.dims["cell"],),
+        "parent_edge_index": (grid.dims["edge"],),
+        "edge_parent_type": (grid.dims["edge"],),
+        "parent_vertex_index": (grid.dims["vertex"],),
+    }
+    for name, shape in expected_shapes.items():
+        if np.asarray(grid.refinement[name]).shape != shape:
+            raise ValueError(f"regional ICON hierarchy field {name} has wrong shape")
 
 
 def _write_icon_dimensions(dataset: Any, grid: Any) -> None:
@@ -576,12 +636,29 @@ def _connectivity_fields(grid: Any) -> Iterator[IconNetcdfField]:
     connectivity = grid.icon_connectivity
     yield "edge_of_cell", ("nv", "cell"), connectivity["c2e"].T + 1, {}
     yield "vertex_of_cell", ("nv", "cell"), grid.cells.T + 1, {}
-    yield "neighbor_cell_index", ("nv", "cell"), connectivity["c2c"].T + 1, {}
-    yield "adjacent_cell_of_edge", ("nc", "edge"), grid.edge_cells.T + 1, {}
+    open_grid = grid.metadata.get("grid_geometry") == 3
+    neighbor = (
+        np.where(connectivity["c2c"] < 0, -1, connectivity["c2c"] + 1)
+        if open_grid
+        else connectivity["c2c"] + 1
+    )
+    adjacent = (
+        np.where(grid.edge_cells < 0, -1, grid.edge_cells + 1)
+        if open_grid
+        else grid.edge_cells + 1
+    )
+    yield "neighbor_cell_index", ("nv", "cell"), neighbor.T, {}
+    yield "adjacent_cell_of_edge", ("nc", "edge"), adjacent.T, {}
     yield "edge_vertices", ("nc", "edge"), grid.edges.T + 1, {}
-    yield "cells_of_vertex", ("ne", "vertex"), connectivity["v2c"].T, {}
-    yield "edges_of_vertex", ("ne", "vertex"), connectivity["v2e"].T, {}
-    yield "vertices_of_vertex", ("ne", "vertex"), connectivity["v2v"].T, {}
+    for name, key in (
+        ("cells_of_vertex", "v2c"),
+        ("edges_of_vertex", "v2e"),
+        ("vertices_of_vertex", "v2v"),
+    ):
+        values = connectivity[key]
+        if open_grid:
+            values = np.where(values == 0, -1, values)
+        yield name, ("ne", "vertex"), values.T, {}
 
 
 def _metric_fields(grid: Any) -> list[IconNetcdfField]:

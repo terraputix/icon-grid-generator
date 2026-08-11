@@ -344,17 +344,80 @@ class RaggedOrthogonalGridSpec:
 
 
 @dataclass(frozen=True)
+class RegionSelectionOptions:
+    """Policies used to select cells for an open regional grid.
+
+    ``inclusion="overlap"`` retains cells whose center or any vertex is in
+    the region, which avoids under-covering a requested domain.  ``"center"``
+    provides the narrower historical behavior.  ``cleanup="remove_ears"``
+    removes one-cell protrusions while preserving every connected component;
+    use ``"none"`` when the exact predicate result is required.
+    """
+
+    inclusion: str = "overlap"
+    cleanup: str = "remove_ears"
+    buffer_rings: int = 0
+
+    def __post_init__(self) -> None:
+        if self.inclusion not in {"overlap", "center"}:
+            raise ValueError("selection inclusion must be 'overlap' or 'center'")
+        if self.cleanup not in {"remove_ears", "none"}:
+            raise ValueError("selection cleanup must be 'remove_ears' or 'none'")
+        if not isinstance(self.buffer_rings, int) or isinstance(
+            self.buffer_rings, bool
+        ):
+            raise TypeError("selection buffer_rings must be a non-negative integer")
+        if self.buffer_rings < 0:
+            raise ValueError("selection buffer_rings must be non-negative")
+
+
+@dataclass(frozen=True)
+class OpenBoundaryOptions:
+    """Metric and indexing policies for non-periodic triangular grids.
+
+    A clipped dual terminates at the primal boundary edge and is the default
+    finite-volume interpretation.  ``metric_closure="mirrored"`` extends the
+    dual by reflecting the interior half across the boundary.  ICON ordering
+    groups the active boundary refinement levels before the unordered interior.
+    """
+
+    metric_closure: str = "clipped"
+    indexing_depth: int = 14
+    ordering: str = "icon"
+
+    def __post_init__(self) -> None:
+        if self.metric_closure not in {"clipped", "mirrored"}:
+            raise ValueError("metric_closure must be 'clipped' or 'mirrored'")
+        if not isinstance(self.indexing_depth, int) or isinstance(
+            self.indexing_depth, bool
+        ):
+            raise TypeError("indexing_depth must be a positive integer")
+        if self.indexing_depth <= 0:
+            raise ValueError("indexing_depth must be positive")
+        if self.ordering not in {"icon", "source"}:
+            raise ValueError("boundary ordering must be 'icon' or 'source'")
+
+
+@dataclass(frozen=True)
 class LimitedAreaGridSpec:
     """Limited-area grid extracted from a generated global parent grid.
 
-    The region selects parent cell centers, and ``boundary_depth`` adds that
-    many cell-neighbor rings after selection. The complete parent is generated
-    with the same :class:`IconGridOptions` before extraction.
+    By default the region is cut from the preceding bisection level and then
+    refined locally once.  This gives the final grid real immediate-parent
+    provenance and avoids constructing the full final-resolution globe.
+    ``construction="cut_final"`` retains the direct final-grid extraction.
+
+    ``boundary_depth`` is the backwards-compatible spelling of selection
+    buffer rings.  New code should use ``selection.buffer_rings``.
     """
 
     parent: str | GlobalGridSpec
     region: Any
     boundary_depth: int = 0
+    construction: str = "refine_last"
+    selection: RegionSelectionOptions = field(default_factory=RegionSelectionOptions)
+    boundary: OpenBoundaryOptions = field(default_factory=OpenBoundaryOptions)
+    local_optimization_iterations: int = 250
     name: str = ""
 
     def __post_init__(self) -> None:
@@ -374,6 +437,22 @@ class LimitedAreaGridSpec:
             raise TypeError("boundary_depth must be a non-negative integer")
         if self.boundary_depth < 0:
             raise ValueError("boundary_depth must be non-negative")
+        if self.construction not in {"refine_last", "cut_final"}:
+            raise ValueError("construction must be 'refine_last' or 'cut_final'")
+        if not isinstance(self.selection, RegionSelectionOptions):
+            raise TypeError("selection must be a RegionSelectionOptions instance")
+        if not isinstance(self.boundary, OpenBoundaryOptions):
+            raise TypeError("boundary must be an OpenBoundaryOptions instance")
+        if self.boundary_depth and self.selection.buffer_rings:
+            raise ValueError(
+                "use either boundary_depth or selection.buffer_rings, not both"
+            )
+        if not isinstance(self.local_optimization_iterations, int) or isinstance(
+            self.local_optimization_iterations, bool
+        ):
+            raise TypeError("local_optimization_iterations must be non-negative")
+        if self.local_optimization_iterations < 0:
+            raise ValueError("local_optimization_iterations must be non-negative")
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "region", region)
         object.__setattr__(self, "parent_grid_name", parent.name)
@@ -472,6 +551,39 @@ class _OrientedRectangleRegion:
 
 
 @dataclass(frozen=True)
+class _RotatedLonLatBoxRegion:
+    """A longitude/latitude box expressed in a rotated-pole coordinate system."""
+
+    pole_lon: float
+    pole_lat: float
+    center_lon: float
+    center_lat: float
+    half_width_lon: float
+    half_width_lat: float
+
+    def __post_init__(self) -> None:
+        for name in (
+            "pole_lon",
+            "pole_lat",
+            "center_lon",
+            "center_lat",
+            "half_width_lon",
+            "half_width_lat",
+        ):
+            object.__setattr__(self, name, _finite_float_option(name, getattr(self, name)))
+        if not -180.0 <= self.pole_lon <= 180.0:
+            raise ValueError("pole_lon must be within [-180, 180]")
+        if not -90.0 <= self.pole_lat <= 90.0:
+            raise ValueError("pole_lat must be within [-90, 90]")
+        if not -180.0 <= self.center_lon <= 180.0:
+            raise ValueError("center_lon must be within [-180, 180]")
+        if not -90.0 <= self.center_lat <= 90.0:
+            raise ValueError("center_lat must be within [-90, 90]")
+        if self.half_width_lon <= 0.0 or self.half_width_lat <= 0.0:
+            raise ValueError("rotated box half-widths must be positive")
+
+
+@dataclass(frozen=True)
 class _PolygonRegion:
     """Select cells inside a lon/lat polygon."""
 
@@ -531,12 +643,36 @@ class Region:
         )
 
     @staticmethod
+    def rotated_lonlat_box(
+        *,
+        pole_lon: float,
+        pole_lat: float,
+        center_lon: float,
+        center_lat: float,
+        half_width_lon: float,
+        half_width_lat: float,
+    ) -> _RotatedLonLatBoxRegion:
+        """Return a box defined in rotated-pole longitude/latitude."""
+        return _RotatedLonLatBoxRegion(
+            pole_lon=pole_lon,
+            pole_lat=pole_lat,
+            center_lon=center_lon,
+            center_lat=center_lat,
+            half_width_lon=half_width_lon,
+            half_width_lat=half_width_lat,
+        )
+
+    @staticmethod
     def polygon(points: tuple[tuple[float, float], ...]) -> _PolygonRegion:
         return _PolygonRegion(points=points)
 
 
 _RegionSpec = (
-    _LonLatBoxRegion | _CircleRegion | _OrientedRectangleRegion | _PolygonRegion
+    _LonLatBoxRegion
+    | _CircleRegion
+    | _OrientedRectangleRegion
+    | _RotatedLonLatBoxRegion
+    | _PolygonRegion
 )
 
 
@@ -545,6 +681,7 @@ def _normalize_region(region: Any) -> _RegionSpec:
         _LonLatBoxRegion,
         _CircleRegion,
         _OrientedRectangleRegion,
+        _RotatedLonLatBoxRegion,
         _PolygonRegion,
     )
     if not isinstance(region, supported_region_types):
@@ -555,7 +692,13 @@ def _normalize_region(region: Any) -> _RegionSpec:
 def _normalize_regions(regions: Any) -> tuple[_RegionSpec, ...]:
     if isinstance(
         regions,
-        (_LonLatBoxRegion, _CircleRegion, _OrientedRectangleRegion, _PolygonRegion),
+        (
+            _LonLatBoxRegion,
+            _CircleRegion,
+            _OrientedRectangleRegion,
+            _RotatedLonLatBoxRegion,
+            _PolygonRegion,
+        ),
     ):
         normalized = (regions,)
     else:
@@ -584,6 +727,8 @@ class CutGridSpec:
     mode: str = "keep"
     boundary_depth: int = 0
     smoothing_depth: int = 0
+    selection: RegionSelectionOptions = field(default_factory=RegionSelectionOptions)
+    boundary: OpenBoundaryOptions = field(default_factory=OpenBoundaryOptions)
     name: str = ""
 
     def __post_init__(self) -> None:
@@ -598,6 +743,14 @@ class CutGridSpec:
                 raise TypeError(f"{name} must be a non-negative integer")
             if value < 0:
                 raise ValueError(f"{name} must be non-negative")
+        if not isinstance(self.selection, RegionSelectionOptions):
+            raise TypeError("selection must be a RegionSelectionOptions instance")
+        if not isinstance(self.boundary, OpenBoundaryOptions):
+            raise TypeError("boundary must be an OpenBoundaryOptions instance")
+        if self.boundary_depth and self.selection.buffer_rings:
+            raise ValueError(
+                "use either boundary_depth or selection.buffer_rings, not both"
+            )
         object.__setattr__(self, "regions", regions)
         if not self.name:
             object.__setattr__(self, "name", "CUT_GRID")
@@ -1034,16 +1187,22 @@ def _generate_planar_grid(spec: Any, options: IconGridOptions) -> IconGrid:
 def _generate_limited_area_grid(
     spec: LimitedAreaGridSpec, options: IconGridOptions
 ) -> IconGrid:
-    geometry, topology, metrics, refinement, parent = LimitedAreaExtractor().build(
-        spec,
-        options,
-    )
+    (
+        geometry,
+        topology,
+        metrics,
+        refinement,
+        parent,
+        immediate_parent_uuid,
+    ) = LimitedAreaExtractor().build(spec, options)
     metadata = _metadata(
         spec,
         options,
         metrics.fields,
-        parent_uuid=parent.metadata["uuidOfHGrid"],
+        parent_uuid=immediate_parent_uuid,
     )
+    metadata["construction_parent_grid_name"] = parent.name
+    metadata["construction_parent_uuid"] = parent.metadata["uuidOfHGrid"]
     return IconGrid(
         spec=spec,
         options=options,
@@ -1078,6 +1237,8 @@ def cut_grid(
     mode: str = "keep",
     boundary_depth: int = 0,
     smoothing_depth: int = 0,
+    selection: RegionSelectionOptions | None = None,
+    boundary: OpenBoundaryOptions | None = None,
     name: str = "",
 ) -> IconGrid:
     """Extract an open cut grid from an existing in-memory grid.
@@ -1090,7 +1251,14 @@ def cut_grid(
     from ._limited_area import cut_existing_grid
 
     if isinstance(spec, CutGridSpec):
-        if mode != "keep" or boundary_depth != 0 or smoothing_depth != 0 or name:
+        if (
+            mode != "keep"
+            or boundary_depth != 0
+            or smoothing_depth != 0
+            or selection is not None
+            or boundary is not None
+            or name
+        ):
             raise TypeError("cut options cannot be passed when spec is a CutGridSpec")
     else:
         spec = CutGridSpec(
@@ -1098,6 +1266,8 @@ def cut_grid(
             mode=mode,
             boundary_depth=boundary_depth,
             smoothing_depth=smoothing_depth,
+            selection=RegionSelectionOptions() if selection is None else selection,
+            boundary=OpenBoundaryOptions() if boundary is None else boundary,
             name=name,
         )
 
@@ -1134,7 +1304,11 @@ def cut_grid(
             ),
             "source_periodic": int(getattr(geometry_spec, "periodic", False)),
             "source_periodic_x": int(getattr(geometry_spec, "periodic_x", False)),
-            "boundary_depth_index": spec.boundary_depth,
+            "selection_buffer_rings": spec.boundary_depth
+            or spec.selection.buffer_rings,
+            "boundary_depth_index": spec.boundary.indexing_depth,
+            "boundary_metric_closure": spec.boundary.metric_closure,
+            "boundary_ordering": spec.boundary.ordering,
             "smoothing_depth": spec.smoothing_depth,
             "cut_mode": spec.mode,
         }
@@ -2900,9 +3074,24 @@ def _metadata(
         metadata.update(
             {
                 "grid_geometry": 3,
+                "grid_root": spec.parent.root,
+                "grid_level": spec.parent.bisections,
                 "parent_grid_name": spec.parent_grid_name,
                 "limited_area_region": _region_class_name(spec.region),
-                "boundary_depth_index": spec.boundary_depth,
+                "limited_area_construction": spec.construction,
+                "selection_inclusion": spec.selection.inclusion,
+                "selection_cleanup": spec.selection.cleanup,
+                "selection_buffer_rings": spec.boundary_depth
+                or spec.selection.buffer_rings,
+                "boundary_depth_index": spec.boundary.indexing_depth,
+                "boundary_metric_closure": spec.boundary.metric_closure,
+                "boundary_ordering": spec.boundary.ordering,
+                "local_optimization_iterations": spec.local_optimization_iterations,
+                "centre": options.global_grid.centre,
+                "subcentre": options.global_grid.subcentre,
+                "center": options.global_grid.centre,
+                "subcenter": options.global_grid.subcentre,
+                "number_of_grid_used": options.global_grid.number_of_grid_used or 1,
             }
         )
     elif isinstance(spec, CutGridSpec):
@@ -2910,7 +3099,13 @@ def _metadata(
             {
                 "grid_geometry": 3,
                 "cut_mode": spec.mode,
-                "boundary_depth_index": spec.boundary_depth,
+                "selection_inclusion": spec.selection.inclusion,
+                "selection_cleanup": spec.selection.cleanup,
+                "selection_buffer_rings": spec.boundary_depth
+                or spec.selection.buffer_rings,
+                "boundary_depth_index": spec.boundary.indexing_depth,
+                "boundary_metric_closure": spec.boundary.metric_closure,
+                "boundary_ordering": spec.boundary.ordering,
                 "smoothing_depth": spec.smoothing_depth,
                 "cut_region_count": len(spec.regions),
             }
@@ -2966,13 +3161,18 @@ def _spec_uuid(
             }
         )
     elif isinstance(spec, LimitedAreaGridSpec):
+        spec_payload = asdict(spec)
         payload.update(
             {
                 "family": "limited_area",
                 "parent_grid_name": spec.parent_grid_name,
                 "parent_uuid": parent_uuid,
-                "region": _canonicalize_payload(asdict(spec)["region"]),
+                "region": _canonicalize_payload(spec_payload["region"]),
                 "boundary_depth": spec.boundary_depth,
+                "construction": spec.construction,
+                "selection": _canonicalize_payload(spec_payload["selection"]),
+                "boundary": _canonicalize_payload(spec_payload["boundary"]),
+                "local_optimization_iterations": spec.local_optimization_iterations,
             }
         )
     elif isinstance(spec, _PLANAR_GRID_SPEC_TYPES):
@@ -2986,6 +3186,7 @@ def _spec_uuid(
             }
         )
     elif isinstance(spec, CutGridSpec):
+        spec_payload = asdict(spec)
         payload.update(
             {
                 "family": "cut",
@@ -2993,7 +3194,9 @@ def _spec_uuid(
                 "mode": spec.mode,
                 "boundary_depth": spec.boundary_depth,
                 "smoothing_depth": spec.smoothing_depth,
-                "regions": _canonicalize_payload(asdict(spec)["regions"]),
+                "regions": _canonicalize_payload(spec_payload["regions"]),
+                "selection": _canonicalize_payload(spec_payload["selection"]),
+                "boundary": _canonicalize_payload(spec_payload["boundary"]),
             }
         )
     else:

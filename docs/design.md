@@ -1,5 +1,11 @@
 # Design Notes
 
+The proposed architecture for fully functional limited-area and general
+open-boundary ICON grids is documented separately in
+[Valid Limited-Area and Open-Boundary ICON Grids](limited-area-icon-design.md).
+It distinguishes correctness and current ICON-NWP requirements from optional
+icontools reproduction behavior.
+
 ICON Grid Generator builds in-memory `IconGrid` objects through a small,
 deterministic pipeline:
 

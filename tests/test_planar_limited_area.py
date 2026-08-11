@@ -6,8 +6,10 @@ import pytest
 from grid_generator import (
     ChannelGridSpec,
     LimitedAreaGridSpec,
+    OpenBoundaryOptions,
     ParallelogramGridSpec,
     Region,
+    RegionSelectionOptions,
     TorusGridSpec,
     generate_grid,
 )
@@ -247,13 +249,15 @@ def test_limited_area_grid_is_compact_boundary_ordered_and_parent_linked():
         boundary_depth=1,
     )
     grid = generate_grid(spec, options={"max_cells": None})
-    parent = generate_grid("R02B01", options={"max_cells": None})
     parent_cells = grid.refinement["parent_cell_index"] - 1
 
     assert grid.name == "LAM_R02B01"
     assert grid.metadata["grid_geometry"] == 3
     assert grid.metadata["parent_grid_name"] == "R02B01"
-    assert grid.metadata["boundary_depth_index"] == 1
+    assert grid.metadata["boundary_depth_index"] == 14
+    assert grid.metadata["selection_buffer_rings"] == 1
+    assert grid.metadata["construction_parent_grid_name"] == "R02B00"
+    assert grid.metadata["number_of_grid_used"] == 1
     assert grid.dims["cell"] > 0
     assert grid.dims["vertex"] == len(np.unique(grid.cells))
     assert np.all((0 <= grid.cells) & (grid.cells < grid.dims["vertex"]))
@@ -261,9 +265,14 @@ def test_limited_area_grid_is_compact_boundary_ordered_and_parent_linked():
     assert np.any(grid.edge_cells[:, 1] < 0)
     assert np.all(grid.edge_cells[:, 0] >= 0)
     assert np.all(parent_cells >= 0)
-    assert np.all(parent_cells < parent.dims["cell"])
+    assert np.array_equal(
+        np.bincount(parent_cells),
+        np.full(parent_cells.max() + 1, 4),
+    )
     assert np.all(grid.refinement["parent_edge_index"] > 0)
-    assert np.all(grid.refinement["parent_vertex_index"] > 0)
+    assert np.all(grid.refinement["parent_vertex_index"] != 0)
+    assert np.any(grid.refinement["parent_vertex_index"] < 0)
+    assert set(np.unique(grid.refinement["parent_cell_type"])) == {200, 201, 202, 203}
     assert np.all(np.diff(grid.refinement["refin_c_ctrl"]) >= 0)
     assert np.min(grid.refinement["refin_c_ctrl"]) == 1
     assert np.all(np.isfinite(grid.geometry["cell_area"]))
@@ -282,11 +291,13 @@ def test_limited_area_default_uses_optimized_global_parent():
     )
 
     grid = generate_grid(spec, spring_iterations=5)
-    parent = generate_grid("R02B01", spring_iterations=5)
-    parent_cells = grid.refinement["parent_cell_index"] - 1
+    parent = generate_grid("R02B00", spring_iterations=5)
 
     assert grid.options.optimize_global is True
-    assert np.allclose(grid.cell_center_xyz, parent.cell_center_xyz[parent_cells])
+    assert grid.metadata["construction_parent_grid_name"] == parent.name
+    assert grid.metadata["construction_parent_uuid"] == parent.metadata["uuidOfHGrid"]
+    assert grid.metadata["uuidOfParHGrid"] != parent.metadata["uuidOfHGrid"]
+    assert grid.dims["cell"] % 4 == 0
 
 
 def test_limited_area_can_use_raw_or_explicitly_optimized_global_parent():
@@ -301,18 +312,97 @@ def test_limited_area_can_use_raw_or_explicitly_optimized_global_parent():
     )
 
     raw_grid = generate_grid(spec, optimize_global=False)
-    raw_parent = generate_grid("R02B01", optimize_global=False)
     optimized_grid = generate_grid(spec, optimize_global=True, spring_iterations=5)
 
-    raw_parent_cells = raw_grid.refinement["parent_cell_index"] - 1
     assert raw_grid.options.optimize_global is False
-    assert np.allclose(raw_grid.cell_center_xyz, raw_parent.cell_center_xyz[raw_parent_cells])
+    assert raw_grid.metadata["construction_parent_grid_name"] == "R02B00"
     assert optimized_grid.options.optimize_global is True
-    assert optimized_grid.dims["cell"] > 0
+    assert optimized_grid.dims == raw_grid.dims
+    assert optimized_grid.metadata["uuidOfHGrid"] != raw_grid.metadata["uuidOfHGrid"]
+
+
+def test_limited_area_cut_final_is_an_explicit_direct_extraction():
+    grid = generate_grid(
+        LimitedAreaGridSpec(
+            parent="R02B01",
+            region=Region.circle(lon=0.0, lat=0.0, radius_degrees=45.0),
+            construction="cut_final",
+            selection=RegionSelectionOptions(cleanup="none"),
+            local_optimization_iterations=0,
+        ),
+        optimize_global=False,
+    )
+
+    assert grid.metadata["construction_parent_grid_name"] == "R02B01"
+    assert np.all(grid.refinement["parent_cell_index"] > 0)
+    assert np.all(grid.refinement["parent_cell_type"] == 0)
+    assert np.all(grid.refinement["parent_vertex_index"] > 0)
+
+
+def test_overlap_selection_covers_center_selection_and_rotated_boxes():
+    parent = generate_grid("R02B01", optimize_global=False)
+    region = Region.rotated_lonlat_box(
+        pole_lon=-170.0,
+        pole_lat=43.0,
+        center_lon=-1.01,
+        center_lat=-0.53,
+        half_width_lon=20.0,
+        half_width_lat=15.0,
+    )
+    center = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            selection=RegionSelectionOptions(inclusion="center", cleanup="none"),
+        ),
+    )
+    overlap = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            selection=RegionSelectionOptions(inclusion="overlap", cleanup="none"),
+        ),
+    )
+
+    assert set(center.refinement["parent_cell_index"]) <= set(
+        overlap.refinement["parent_cell_index"]
+    )
+    assert overlap.dims["cell"] > center.dims["cell"]
+
+
+def test_clipped_and_mirrored_boundary_metric_closures_are_explicit():
+    parent = generate_grid("R02B01", optimize_global=False)
+    region = Region.circle(lon=0.0, lat=0.0, radius_degrees=45.0)
+    clipped = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            boundary=OpenBoundaryOptions(metric_closure="clipped"),
+        ),
+    )
+    mirrored = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            boundary=OpenBoundaryOptions(metric_closure="mirrored"),
+        ),
+    )
+    boundary = clipped.edge_cells[:, 1] < 0
+
+    assert np.array_equal(clipped.edges, mirrored.edges)
+    assert clipped.metadata["uuidOfHGrid"] != mirrored.metadata["uuidOfHGrid"]
+    assert np.all(clipped.geometry["edge_cell_distance"][boundary, 1] == 0.0)
+    assert np.allclose(
+        mirrored.geometry["dual_edge_length"][boundary],
+        2.0 * clipped.geometry["dual_edge_length"][boundary],
+    )
+    assert np.allclose(
+        mirrored.geometry["dual_edge_length"][~boundary],
+        clipped.geometry["dual_edge_length"][~boundary],
+    )
 
 
 def test_limited_area_normals_follow_local_cell_order_and_parent_provenance():
-    parent = generate_grid("R01B02", optimize_global=False)
     grid = generate_grid(
         LimitedAreaGridSpec(
             parent="R01B02",
@@ -326,23 +416,14 @@ def test_limited_area_normals_follow_local_cell_order_and_parent_provenance():
         ),
         optimize_global=False,
     )
-    source_edges = grid.refinement["parent_edge_index"] - 1
-    first_source_cells = (
-        grid.refinement["parent_cell_index"][grid.edge_cells[:, 0]] - 1
-    )
-    expected_sign = np.where(
-        first_source_cells == parent.edge_cells[source_edges, 0],
-        1.0,
-        -1.0,
-    )
-    normal_alignment = np.sum(
-        grid.geometry["edge_primal_normal_cartesian"]
-        * parent.geometry["edge_primal_normal_cartesian"][source_edges],
-        axis=1,
-    )
-
-    assert np.allclose(normal_alignment, expected_sign)
-    assert grid.metadata["uuidOfParHGrid"] == parent.metadata["uuidOfHGrid"]
+    primal = grid.geometry["edge_primal_normal_cartesian"]
+    dual = grid.geometry["edge_dual_normal_cartesian"]
+    assert np.allclose(np.linalg.norm(primal, axis=1), 1.0)
+    assert np.allclose(np.linalg.norm(dual, axis=1), 1.0)
+    assert np.allclose(np.sum(primal * dual, axis=1), 0.0, atol=1.0e-12)
+    parent_uuid = generate_grid("R01B01", optimize_global=False).metadata["uuidOfHGrid"]
+    assert grid.metadata["construction_parent_uuid"] == parent_uuid
+    assert grid.metadata["uuidOfParHGrid"] != parent_uuid
 
 
 @pytest.mark.parametrize(
@@ -395,7 +476,8 @@ def test_cut_grid_supports_region_predicates_keep_remove_and_metadata():
     assert remove.dims["cell"] > 0
     assert remove.dims["cell"] < parent.dims["cell"]
     assert cut.metadata["source_grid_name"] == parent.name
-    assert cut.metadata["boundary_depth_index"] == 1
+    assert cut.metadata["boundary_depth_index"] == 14
+    assert cut.metadata["selection_buffer_rings"] == 1
     assert cut.metadata["smoothing_depth"] == 2
     assert np.any(cut.edge_cells[:, 1] < 0)
     assert np.all(cut.refinement["parent_cell_index"] > 0)
@@ -438,7 +520,8 @@ def test_cut_grid_accepts_region_directly_for_common_case():
     )
 
     assert cut.name == "CUT_DIRECT"
-    assert cut.metadata["boundary_depth_index"] == 1
+    assert cut.metadata["boundary_depth_index"] == 14
+    assert cut.metadata["selection_buffer_rings"] == 1
     assert cut.metadata["smoothing_depth"] == 2
     assert cut.dims["cell"] > 0
     assert cut.dims["cell"] < parent.dims["cell"]
