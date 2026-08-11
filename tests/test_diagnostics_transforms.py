@@ -49,10 +49,12 @@ def test_transforms_keep_planar_cut_grids_planar():
     diffused = diffuse_grid(cut, DiffusionOptions(iterations=1, fixed_boundary=False))
 
     assert cut.metadata["grid_geometry"] == 3
-    assert cut.metadata["source_grid_geometry"] == 2
+    assert cut.metadata["source_grid_geometry"] == 3
+    assert cut.metadata["open_boundary"] == 1
     for transformed in (optimized, diffused):
         assert transformed.metadata["grid_geometry"] == 3
-        assert transformed.metadata["source_grid_geometry"] == 2
+        assert transformed.metadata["source_grid_geometry"] == 3
+        assert transformed.metadata["open_boundary"] == 1
         assert np.array_equal(transformed.cells, cut.cells)
         assert np.array_equal(transformed.edges, cut.edges)
         assert np.allclose(transformed.vertices[:, 2], cut.vertices[:, 2])
@@ -68,7 +70,10 @@ def test_transforms_keep_spherical_cut_grids_spherical():
 
     optimized = optimize_grid(cut, OptimizationOptions(iterations=1, fixed_boundary=False))
 
+    assert cut.metadata["grid_geometry"] == 1
     assert cut.metadata["source_grid_geometry"] == 1
+    assert cut.metadata["open_boundary"] == 1
+    assert optimized.metadata["grid_geometry"] == 1
     assert optimized.metadata["source_grid_geometry"] == 1
     assert np.array_equal(optimized.cells, cut.cells)
     assert np.array_equal(optimized.edges, cut.edges)
@@ -127,8 +132,10 @@ def test_nested_planar_cut_retains_ultimate_geometry_family():
         DiffusionOptions(iterations=1, fixed_boundary=False),
     )
 
-    assert second.metadata["parent_grid_geometry"] == 3
+    assert second.metadata["parent_grid_geometry"] == 2
     assert second.metadata["source_grid_geometry"] == 2
+    assert second.metadata["grid_geometry"] == 2
+    assert second.metadata["open_boundary"] == 1
     assert transformed.geometry_spec is parent.spec
     assert np.allclose(transformed.vertices[:, 2], second.vertices[:, 2])
 

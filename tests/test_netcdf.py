@@ -9,7 +9,10 @@ import numpy as np
 import pytest
 
 from grid_generator import (
+    ChannelGridSpec,
     GlobalGridSpec,
+    LimitedAreaGridSpec,
+    ParallelogramGridSpec,
     Region,
     TorusGridSpec,
     generate_grid,
@@ -18,6 +21,7 @@ from grid_generator import (
 from grid_generator import _netcdf
 from grid_generator import _streaming
 from grid_generator.cutting import cut_grid
+from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSpec
 
 
 def unit_rows(points):
@@ -28,8 +32,8 @@ def test_netcdf_field_profiles_have_audited_contract_sizes():
     profiles = _netcdf.ICON_NETCDF_FIELD_PROFILES
 
     assert set(profiles) == {"full", "reduced", "icon", "icon4py"}
-    assert len(_netcdf.ICON_NETCDF_FIELD_NAMES) == 85
-    assert len(profiles["full"]) == 85
+    assert len(_netcdf.ICON_NETCDF_FIELD_NAMES) == 88
+    assert len(profiles["full"]) == 88
     assert len(profiles["reduced"]) == 46
     assert len(profiles["icon"]) == 38
     assert len(profiles["icon4py"]) == 26
@@ -94,6 +98,19 @@ def test_netcdf_explicit_field_collection_is_validated_and_schema_ordered(tmp_pa
             fields="portable",
         )
     assert not (tmp_path / ".never-generated.nc.work").exists()
+
+
+def test_default_netcdf_includes_established_compatibility_fields(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    output = generate_grid("R02B01").to_netcdf(tmp_path / "grid.nc")
+
+    with netcdf4.Dataset(output) as dataset:
+        assert dataset.variables["quadrilateral_area"].dimensions == ("edge",)
+        assert np.all(dataset.variables["quadrilateral_area"][:] == 0.0)
+        assert dataset.variables["vlon_vertices"].dimensions == ("vertex", "ne")
+        assert dataset.variables["vlat_vertices"].dimensions == ("vertex", "ne")
+        assert dataset.variables["vlon"].getncattr("bounds") == "vlon_vertices"
+        assert dataset.variables["vlat"].getncattr("bounds") == "vlat_vertices"
 
 
 def test_streamed_global_netcdf_matches_in_memory_export(monkeypatch, tmp_path):
@@ -448,6 +465,90 @@ def test_planar_cut_netcdf_retains_physical_edgequad_area(tmp_path):
             grid.geometry["edgequad_area"],
         )
         assert dataset.variables["edgequad_area"].getncattr("units") == "m2"
+        assert np.any(dataset.variables["neighbor_cell_index"][:] == -1)
+        assert np.any(dataset.variables["adjacent_cell_of_edge"][:] == -1)
+        assert np.any(dataset.variables["cells_of_vertex"][:] == -1)
+        assert not np.any(dataset.variables["neighbor_cell_index"][:] == 0)
+
+
+def test_refine_last_limited_area_netcdf_has_icon_boundary_contract(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    grid = generate_grid(
+        LimitedAreaGridSpec(
+            parent="R02B02",
+            region=Region.circle(lon=0.0, lat=0.0, radius_degrees=45.0),
+            local_optimization_iterations=0,
+        ),
+        optimize_global=False,
+    )
+    path = grid.to_netcdf(tmp_path / "limited.nc", fields="full")
+
+    with netcdf4.Dataset(path) as dataset:
+        assert dataset.getncattr("grid_geometry") == 1
+        assert dataset.getncattr("open_boundary") == 1
+        assert dataset.getncattr("grid_root") == 2
+        assert dataset.getncattr("grid_level") == 2
+        assert dataset.getncattr("boundary_depth_index") == 14
+        assert dataset.getncattr("construction_parent_grid_name") == "R02B01"
+        assert dataset.getncattr("uuidOfParHGrid") == grid.metadata["uuidOfParHGrid"]
+        assert np.any(dataset.variables["neighbor_cell_index"][:] == -1)
+        assert np.any(dataset.variables["adjacent_cell_of_edge"][:] == -1)
+        assert np.array_equal(
+            dataset.variables["refin_c_ctrl"][:],
+            grid.refinement["refin_c_ctrl"],
+        )
+        assert set(np.unique(dataset.variables["parent_cell_type"][:])) == {
+            200,
+            201,
+            202,
+            203,
+        }
+        assert np.any(dataset.variables["parent_vertex_index"][:] < 0)
+
+
+def test_limited_area_icon_profile_selects_spherical_reconstruction(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    grid = generate_grid(
+        LimitedAreaGridSpec(
+            parent="R02B01",
+            region=Region.circle(lon=0.0, lat=0.0, radius_degrees=60.0),
+            local_optimization_iterations=0,
+        ),
+        optimize_global=False,
+    )
+    path = grid.to_netcdf(tmp_path / "limited-icon.nc", fields="icon")
+
+    with netcdf4.Dataset(path) as dataset:
+        assert dataset.getncattr("grid_geometry") == 1
+        assert dataset.getncattr("open_boundary") == 1
+        assert "cartesian_x_vertices" not in dataset.variables
+        assert np.any(dataset.variables["neighbor_cell_index"][:] == -1)
+        assert np.any(dataset.variables["adjacent_cell_of_edge"][:] == -1)
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected_geometry"),
+    [
+        (StretchedTorusGridSpec(nx=4, ny=3, edge_length=2.0), 2),
+        (ChannelGridSpec(nx=3, ny=2, edge_length=2.0), 3),
+        (ParallelogramGridSpec(nx=3, ny=2, edge_length=2.0), 4),
+        (RaggedOrthogonalGridSpec(nx=3, ny=2, dx=2.0, dy=1.5), 4),
+    ],
+)
+def test_planar_netcdf_uses_icon_geometry_enum(
+    spec, expected_geometry, tmp_path
+):
+    netcdf4 = pytest.importorskip("netCDF4")
+    grid = generate_grid(spec)
+    path = grid.to_netcdf(tmp_path / f"planar-{expected_geometry}.nc")
+
+    with netcdf4.Dataset(path) as dataset:
+        assert dataset.getncattr("grid_geometry") == expected_geometry
+        assert "open_boundary" not in dataset.ncattrs()
+        assert np.allclose(
+            dataset.variables["cartesian_x_vertices"][:],
+            grid.vertices[:, 0],
+        )
 
 
 def test_to_netcdf_writes_expected_icon_grid_content(tmp_path):

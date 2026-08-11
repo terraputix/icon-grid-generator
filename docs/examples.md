@@ -184,7 +184,12 @@ parent.
 ```python
 from pathlib import Path
 
-from grid_generator import LimitedAreaGridSpec, Region, generate_grid
+from grid_generator import (
+    LimitedAreaGridSpec,
+    Region,
+    RegionSelectionOptions,
+    generate_grid,
+)
 from grid_generator.visualization import write_svg
 
 output = Path("grid_examples")
@@ -193,7 +198,7 @@ output.mkdir(exist_ok=True)
 spec = LimitedAreaGridSpec(
     parent="R2B1",
     region=Region.lonlat_box(lon_min=-30.0, lon_max=30.0, lat_min=-20.0, lat_max=35.0),
-    boundary_depth=1,
+    selection=RegionSelectionOptions(buffer_rings=1),
 )
 grid = generate_grid(spec, spring_iterations=20)
 print(grid.name)
@@ -255,7 +260,8 @@ write_svg(cut, output / "cut_multi_region.svg")
 
 ![Multi-region cut grid](assets/examples/cut_multi_region.svg)
 
-Here `boundary_depth` adds neighbor rings around the selected cells.
+Here `RegionSelectionOptions.buffer_rings` adds neighbor rings around the
+selected cells (`boundary_depth` remains a backwards-compatible spelling).
 `smoothing_depth` does not alter the geometry; it populates the exported ICON
 `smooth_c_ctrl` field for downstream use.
 

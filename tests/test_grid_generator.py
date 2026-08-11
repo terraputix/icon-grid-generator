@@ -2178,6 +2178,21 @@ def test_root_refinement_with_face_interior_vertices():
     assert_outward_cells(grid)
 
 
+def test_root_refinement_subdivides_icosahedron_edges_by_equal_arc_length():
+    base_vertices, base_faces = gg._icosahedron()
+    vertices, _, _ = gg._sadourny_root_grid(4)
+    first, second = map(int, base_faces[0, :2])
+    expected = [
+        gg._great_circle_interpolate(base_vertices[first], base_vertices[second], cut / 4)
+        for cut in range(1, 4)
+    ]
+
+    for point in expected:
+        assert np.max(vertices @ point) == pytest.approx(1.0, abs=2.0e-15)
+
+    assert generate_grid("R03B00").metadata["root_subdivision"] == "great_circle"
+
+
 def test_defensive_edge_count_mismatch_check(monkeypatch):
     def fake_build_edges(cells):
         return (
