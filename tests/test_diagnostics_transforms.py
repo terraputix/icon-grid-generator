@@ -83,7 +83,7 @@ def test_transforms_keep_spherical_cut_grids_spherical():
 
 
 def test_periodic_cut_transforms_reuse_parent_lattice_geometry():
-    parent = generate_grid(TorusGridSpec(nx=6, ny=5, edge_length=1.0))
+    parent = generate_grid(TorusGridSpec(nx=6, ny=6, edge_length=1.0))
     cut = cut_grid(
         parent,
         Region.lonlat_box(
@@ -107,7 +107,7 @@ def test_periodic_cut_transforms_reuse_parent_lattice_geometry():
 
 
 def test_nested_planar_cut_retains_ultimate_geometry_family():
-    parent = generate_grid(TorusGridSpec(nx=6, ny=5, edge_length=1.0))
+    parent = generate_grid(TorusGridSpec(nx=6, ny=6, edge_length=1.0))
     first = cut_grid(
         parent,
         Region.lonlat_box(
@@ -164,7 +164,7 @@ def test_geometry_postprocessing_rejects_invalid_option_objects():
 
 
 def test_diagnostics_and_postprocessing_core_operators():
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=2.0))
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=2.0))
     check = check_grid(grid)
     stats = grid_statistics(grid)
     props = triangle_properties(grid)
@@ -189,7 +189,7 @@ def test_diagnostics_and_postprocessing_core_operators():
 
 
 def test_diagnostics_reject_invalid_field_shapes_and_values():
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=2.0))
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=2.0))
 
     with pytest.raises(ValueError, match="edge_flux"):
         cell_divergence(grid, np.zeros(grid.dims["edge"] + 1))
@@ -212,7 +212,7 @@ def test_diagnostics_reject_invalid_field_shapes_and_values():
 
 
 def test_check_grid_reports_multiple_structural_errors():
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=2.0))
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=2.0))
     vertices = grid.vertices.copy()
     vertices[0, 0] = np.nan
     cells = grid.cells.copy()

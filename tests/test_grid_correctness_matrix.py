@@ -89,7 +89,7 @@ GRID_CASES = [
     ),
     GridCase(
         "planar-torus",
-        lambda: generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1_000.0)),
+        lambda: generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1_000.0)),
         "periodic_planar",
         "closed",
         TorusGridSpec,
@@ -97,7 +97,7 @@ GRID_CASES = [
     GridCase(
         "planar-stretched-torus",
         lambda: generate_grid(
-            StretchedTorusGridSpec(nx=4, ny=3, edge_length=1_000.0, stretch_x=1.3)
+            StretchedTorusGridSpec(nx=4, ny=4, edge_length=1_000.0, stretch_x=1.3)
         ),
         "periodic_planar",
         "closed",
@@ -248,7 +248,7 @@ def test_correctness_matrix_covers_all_supported_grid_spec_classes():
 
 
 def test_planar_regular_modes_match_analytic_metrics():
-    torus = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1_000.0))
+    torus = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1_000.0))
     channel = generate_grid(ChannelGridSpec(nx=4, ny=3, edge_length=1_000.0))
     expected_area = math.sqrt(3.0) * 0.25 * 1_000.0**2
 

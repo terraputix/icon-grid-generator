@@ -49,6 +49,23 @@ NetCDF `grid_geometry` follows ICON's geometry enum: spherical global and
 limited-area grids use `1`, planar tori use `2`, planar channels use `3`, and
 general planar grids use `4`. Regional spherical files carry a separate
 `open_boundary=1` attribute; openness is not a coordinate-geometry type.
+ICON 2024.10's standard NWP interpolation path supports spherical grids and
+planar tori, but not its channel or general-plane enum values; those additional
+planar families remain useful for diagnostics and consumers with matching
+operators rather than as standard ICON-NWP simulation grids.
+
+Planar tori use rectangular, independently wrapped x/y periods by default and
+therefore require an even number of rows. The former coupled skew lattice
+remains available explicitly:
+
+```python
+from grid_generator import TorusGridSpec, generate_grid
+
+torus = generate_grid(TorusGridSpec(nx=12, ny=6, edge_length=1_000.0))
+skew_torus = generate_grid(
+    TorusGridSpec(nx=12, ny=5, edge_length=1_000.0, periodic_layout="skew")
+)
+```
 
 Generate a large global grid directly to NetCDF:
 

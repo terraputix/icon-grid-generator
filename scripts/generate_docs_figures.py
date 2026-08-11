@@ -75,7 +75,7 @@ def _open_planar(output: Path) -> None:
 
 def _advanced_planar(output: Path) -> None:
     stretched = _generate_grid(
-        StretchedTorusGridSpec(nx=8, ny=5, edge_length=1_000.0, stretch_x=1.4)
+        StretchedTorusGridSpec(nx=8, ny=6, edge_length=1_000.0, stretch_x=1.4)
     )
     ragged = _generate_grid(
         RaggedOrthogonalGridSpec(nx=8, ny=5, dx=1_000.0, dy=800.0)

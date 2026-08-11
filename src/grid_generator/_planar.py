@@ -112,26 +112,34 @@ def rebuild_planar_grid(grid: Any, vertices: np.ndarray) -> Any:
 def _periodic_geometry(spec: Any, options: Any) -> GeometryData:
     nx = spec.nx
     ny = spec.ny
+    shift_cols = _periodic_shift_cols(spec)
     vertices = np.zeros((nx * ny, 3), dtype=np.float64)
     for j in range(ny):
         for i in range(nx):
-            vertices[_periodic_vertex_id(i, j, nx, ny)] = (*_periodic_xy(spec, i, j), options.radius)
+            vertices[_periodic_vertex_id(i, j, nx, ny, shift_cols)] = (
+                *_periodic_xy(spec, i, j),
+                options.radius,
+            )
 
     cells: list[tuple[int, int, int]] = []
     for j in range(ny):
         for i in range(nx):
             up = (
-                _periodic_vertex_id(i, j, nx, ny),
-                _periodic_vertex_id(i + 1, j, nx, ny),
-                _periodic_vertex_id(i, j + 1, nx, ny),
+                _periodic_vertex_id(i, j, nx, ny, shift_cols),
+                _periodic_vertex_id(i + 1, j, nx, ny, shift_cols),
+                _periodic_vertex_id(i, j + 1, nx, ny, shift_cols),
             )
             down = (
-                _periodic_vertex_id(i, j, nx, ny),
-                _periodic_vertex_id(i + 1, j - 1, nx, ny),
-                _periodic_vertex_id(i + 1, j, nx, ny),
+                _periodic_vertex_id(i, j, nx, ny, shift_cols),
+                _periodic_vertex_id(i + 1, j - 1, nx, ny, shift_cols),
+                _periodic_vertex_id(i + 1, j, nx, ny, shift_cols),
             )
             for cell in (up, down):
                 cells.append(cell)
+
+    if _uses_rectangular_periodicity(spec):
+        vertices[:, 0] %= spec.domain_length
+        vertices[:, 1] %= spec.domain_height
 
     cell_array = np.asarray(cells, dtype=np.int32)
     centers = _wrap_periodic_points(
@@ -419,8 +427,23 @@ def _build_edges_with_boundary(cells: np.ndarray) -> tuple[np.ndarray, np.ndarra
     return np.asarray(edges, dtype=np.int32), cell_edges, edge_cell_array
 
 
-def _periodic_vertex_id(i: int, j: int, nx: int, ny: int) -> int:
-    return (j % ny) * nx + (i % nx)
+def _periodic_vertex_id(
+    i: int,
+    j: int,
+    nx: int,
+    ny: int,
+    shift_cols: int = 0,
+) -> int:
+    return (j % ny) * nx + ((i + (j // ny) * shift_cols) % nx)
+
+
+def _periodic_shift_cols(spec: Any) -> int:
+    """Return the column shift carried by the y-boundary identification."""
+    return spec.ny // 2 if _uses_rectangular_periodicity(spec) else 0
+
+
+def _uses_rectangular_periodicity(spec: Any) -> bool:
+    return getattr(spec, "periodic_layout", "skew") == "rectangular"
 
 
 def _channel_vertex_id(i: int, j: int, nx: int) -> int:
@@ -586,11 +609,13 @@ def _planar_edge_system_orientation(
 
 
 def _periodic_y_shift(spec: Any) -> float:
+    if _uses_rectangular_periodicity(spec):
+        return 0.0
     return 0.5 * spec.ny * spec.edge_length * getattr(spec, "stretch_x", 1.0)
 
 
 def _wrap_periodic_points(points: np.ndarray, spec: Any) -> np.ndarray:
-    """Return equivalent points in the skew torus fundamental domain."""
+    """Return equivalent points in the configured torus fundamental domain."""
     wrapped = np.asarray(points, dtype=np.float64).copy()
     flat = wrapped.reshape((-1, wrapped.shape[-1]))
     y_wrap = np.floor(flat[:, 1] / spec.domain_height)

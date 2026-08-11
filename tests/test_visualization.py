@@ -13,7 +13,7 @@ from grid_generator.visualization import _projected_segments, write_svg
     [
         generate_grid("R01B01", spring_iterations=5),
         generate_grid("R01B01", optimize_global=False),
-        generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1.0)),
+        generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1.0)),
         generate_grid(ChannelGridSpec(nx=4, ny=3, edge_length=1.0)),
         generate_grid(
             LimitedAreaGridSpec(
@@ -64,7 +64,7 @@ def test_write_svg_rejects_invalid_render_options(tmp_path):
 @pytest.mark.parametrize(
     "grid",
     [
-        generate_grid(TorusGridSpec(nx=8, ny=5, edge_length=1.0)),
+        generate_grid(TorusGridSpec(nx=8, ny=6, edge_length=1.0)),
         generate_grid(ChannelGridSpec(nx=8, ny=5, edge_length=1.0)),
     ],
 )

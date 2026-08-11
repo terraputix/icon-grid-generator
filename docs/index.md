@@ -8,7 +8,8 @@ grids without depending on ICON model runtimes or stencil frameworks.
 ## What It Provides
 
 - Global spherical ICON `R<n>B<k>` grids.
-- Planar torus and open planar triangular grids for local experiments.
+- Rectangular-periodic planar tori and open planar triangular grids for local
+  experiments; coupled skew tori remain an explicit option.
 - Limited-area grids extracted from generated global parent grids.
 - ICON-style NetCDF export when the optional `netCDF4` dependency is installed.
 - Export-first global NetCDF generation with resumable disk checkpoints for

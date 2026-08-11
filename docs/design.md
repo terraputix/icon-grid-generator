@@ -62,10 +62,12 @@ construct NetCDF-only fields in bounded groups. This path returns the output
   carries variant flags such as `periodic` and `periodic_x`; `_planar.py`
   dispatches geometry, topology, and metric behavior from those flags instead
   of adding separate public generation entry points.
-- Doubly periodic triangular grids use the two coupled lattice vectors of the
-  skew fundamental domain. Crossing the periodic y boundary therefore applies
-  both a y wrap and the corresponding x shift. Geometry transforms use the same
-  minimum-image convention when averaging neighboring vertices.
+- Doubly periodic triangular grids use a rectangular fundamental domain by
+  default: x and y wrap independently, while the row offset is carried by the
+  y-boundary vertex identification. This requires an even number of rows.
+  `periodic_layout="skew"` retains the coupled lattice vectors and permits odd
+  row counts. Generation and geometry transforms use the selected convention
+  consistently.
 - Planar dual-edge lengths are computed from generated cell centers through
   edge centers rather than assumed equilateral formulas. Planar vertex dual
   areas use one third of each incident triangle, so open-grid dual areas
@@ -156,11 +158,11 @@ the current vertex before the incident proposals are averaged. `diffuse_grid()`
 uses the same mean displacement multiplied by
 `diffusion_constant * dt * neighbor_weight`.
 
-Periodic displacements use the same coupled lattice minimum-image operation as
-metric generation. Spherical vertices are renormalized to `radius`; planar z
-coordinates are restored; periodic planar coordinates are wrapped to the
-fundamental domain. Open-boundary vertices are excluded from updates when
-`fixed_boundary=True`.
+Periodic displacements use the same configured rectangular or coupled-lattice
+minimum-image operation as metric generation. Spherical vertices are
+renormalized to `radius`; planar z coordinates are restored; periodic planar
+coordinates are wrapped to the selected fundamental domain. Open-boundary
+vertices are excluded from updates when `fixed_boundary=True`.
 
 After movement, the grid rebuilds centers, projected coordinates, metric fields,
 normal vectors, and summary metadata. Topology and refinement arrays are
@@ -192,6 +194,11 @@ the update, so callers remain responsible for checking scientific quality.
 - Planar `lon`/`lat` fields are normalized compatibility and visualization
   coordinates, not a geographic CRS. Scientific planar calculations should use
   Cartesian coordinates and metric arrays.
+- Correct geometry metadata does not guarantee model-operator support. ICON
+  2024.10's standard NWP least-squares and tangent-plane interpolation dispatch
+  supports spherical and planar-torus geometry, but rejects planar-channel and
+  general-planar geometry. Those families require a consumer with matching
+  operators and are not claimed as standard ICON-NWP simulation grids.
 - `smoothing_depth` on a cut is an ICON control-field value written uniformly
   to `smooth_c_ctrl`; it does not invoke the geometry smoothing algorithms.
 - `check_grid()` is a structural check. It does not independently rederive all

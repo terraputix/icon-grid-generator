@@ -262,8 +262,8 @@ def test_release_metadata_matches_latest_changelog_entry():
     "spec",
     [
         GlobalGridSpec(root=1, bisections=0),
-        TorusGridSpec(nx=4, ny=3, edge_length=1.0),
-        StretchedTorusGridSpec(nx=4, ny=3, edge_length=1.0, stretch_y=1.1),
+        TorusGridSpec(nx=4, ny=4, edge_length=1.0),
+        StretchedTorusGridSpec(nx=4, ny=4, edge_length=1.0, stretch_y=1.1),
         ChannelGridSpec(nx=3, ny=2, edge_length=1.0),
         ParallelogramGridSpec(nx=3, ny=2, edge_length=1.0),
         RaggedOrthogonalGridSpec(nx=3, ny=2, dx=1.0, dy=1.0),
