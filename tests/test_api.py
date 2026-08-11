@@ -236,6 +236,25 @@ def test_grid_uuid_rejects_invalid_numeric_inputs(kwargs, error, message):
         gg.grid_uuid("R01B00", **kwargs)
 
 
+@pytest.mark.parametrize("grid_name", ["R01B00", "R02B00", "R03B00", "R04B00"])
+def test_grid_uuid_matches_generated_grid_for_all_root_subdivisions(grid_name):
+    options = {"sphere_radius": 9.0, "optimize_global": False}
+    grid = generate_grid(grid_name, options=options)
+
+    assert gg.grid_uuid(grid_name, options=options) == grid.metadata["uuidOfHGrid"]
+
+
+def test_grid_uuid_explicit_sphere_radius_overrides_options():
+    options = {"sphere_radius": 8.0, "optimize_global": False}
+    expected = generate_grid(
+        "R03B00",
+        options=options,
+        sphere_radius=9.0,
+    ).metadata["uuidOfHGrid"]
+
+    assert gg.grid_uuid("R03B00", options=options, sphere_radius=9.0) == expected
+
+
 @pytest.mark.parametrize(
     ("grid_name", "cells", "edges", "vertices"),
     [

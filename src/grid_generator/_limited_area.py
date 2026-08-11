@@ -188,13 +188,14 @@ def _circumradius_region_mask(parent: Any, region: Any) -> np.ndarray:
 
     centers = parent.cell_center_xyz
     first_vertices = parent.vertices[parent.cells[:, 0]]
+    center_norm = np.linalg.norm(centers, axis=1)
+    vertex_norm = np.linalg.norm(first_vertices, axis=1)
+    cosine = np.sum(centers * first_vertices, axis=1) / (
+        center_norm * vertex_norm
+    )
     radius = np.degrees(
         np.arccos(
-            np.clip(
-                np.sum(centers * first_vertices, axis=1),
-                -1.0,
-                1.0,
-            )
+            np.clip(cosine, -1.0, 1.0)
         )
     )
 

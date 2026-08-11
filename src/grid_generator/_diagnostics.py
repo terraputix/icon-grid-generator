@@ -65,11 +65,52 @@ def check_grid(grid: Any) -> GridCheckResult:
         errors.append("edges contain out-of-range vertex indices")
     if np.any((grid.cell_edges < 0) | (grid.cell_edges >= grid.dims["edge"])):
         errors.append("cell_edges contain out-of-range edge indices")
-    active_edge_cells = grid.edge_cells[grid.edge_cells >= 0]
-    if np.any(active_edge_cells >= grid.dims["cell"]):
+    if np.any((grid.edge_cells < -1) | (grid.edge_cells >= grid.dims["cell"])):
         errors.append("edge_cells contain out-of-range cell indices")
     if len({tuple(sorted(map(int, edge))) for edge in grid.edges}) != grid.dims["edge"]:
         errors.append("edges contain duplicate vertex pairs")
+    topology_shapes_are_valid = (
+        grid.cells.shape == (grid.dims["cell"], 3)
+        and grid.edges.shape == (grid.dims["edge"], 2)
+        and grid.cell_edges.shape == (grid.dims["cell"], 3)
+        and grid.edge_cells.shape == (grid.dims["edge"], 2)
+    )
+    topology_indices_are_valid = (
+        not np.any((grid.cells < 0) | (grid.cells >= grid.dims["vertex"]))
+        and not np.any((grid.edges < 0) | (grid.edges >= grid.dims["vertex"]))
+        and not np.any((grid.cell_edges < 0) | (grid.cell_edges >= grid.dims["edge"]))
+        and not np.any((grid.edge_cells < -1) | (grid.edge_cells >= grid.dims["cell"]))
+    )
+    if topology_shapes_are_valid and topology_indices_are_valid:
+        incident_vertices = grid.edges[grid.cell_edges]
+        vertex_matches = np.any(
+            incident_vertices[:, :, :, np.newaxis]
+            == grid.cells[:, np.newaxis, np.newaxis, :],
+            axis=3,
+        )
+        if not np.all(vertex_matches):
+            errors.append("cell_edges are inconsistent with cell vertices")
+
+        cell_indices = np.repeat(
+            np.arange(grid.dims["cell"], dtype=np.int64),
+            3,
+        )
+        cell_incidence = (
+            grid.cell_edges.astype(np.int64, copy=False).ravel()
+            * grid.dims["cell"]
+            + cell_indices
+        )
+        active = grid.edge_cells >= 0
+        edge_indices = np.broadcast_to(
+            np.arange(grid.dims["edge"], dtype=np.int64)[:, np.newaxis],
+            grid.edge_cells.shape,
+        )
+        edge_incidence = (
+            edge_indices[active] * grid.dims["cell"]
+            + grid.edge_cells[active].astype(np.int64, copy=False)
+        )
+        if not np.array_equal(np.sort(cell_incidence), np.sort(edge_incidence)):
+            errors.append("cell_edges and edge_cells are not reciprocal")
     if np.any(grid.edge_cells[:, 1] < 0):
         warnings.append("grid has open boundary edges")
         if np.any(grid.edge_cells[:, 0] < 0):

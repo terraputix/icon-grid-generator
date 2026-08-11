@@ -256,3 +256,19 @@ def test_check_grid_reports_reversed_duplicate_edges():
 
     assert not check.ok
     assert "edges contain duplicate vertex pairs" in check.errors
+
+
+def test_check_grid_reports_inconsistent_topology_incidence():
+    grid = generate_grid("R01B00", optimize_global=False)
+    wrong_cell_edges = check_grid(
+        replace(grid, cell_edges=np.roll(grid.cell_edges, 1, axis=0))
+    )
+    wrong_edge_cells = check_grid(
+        replace(grid, edge_cells=np.roll(grid.edge_cells, 1, axis=0))
+    )
+
+    assert not wrong_cell_edges.ok
+    assert "cell_edges are inconsistent with cell vertices" in wrong_cell_edges.errors
+    assert "cell_edges and edge_cells are not reciprocal" in wrong_cell_edges.errors
+    assert not wrong_edge_cells.ok
+    assert "cell_edges and edge_cells are not reciprocal" in wrong_edge_cells.errors

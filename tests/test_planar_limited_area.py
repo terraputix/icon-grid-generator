@@ -552,6 +552,48 @@ def test_circumradius_selection_is_the_default():
     assert np.all(np.abs(source_lon) > 100.0)
 
 
+def test_circumradius_selection_is_invariant_to_cartesian_display_radius():
+    region = Region.circle(lon=0.0, lat=0.0, radius_degrees=12.0)
+    selection = RegionSelectionOptions(inclusion="circumradius", cleanup="none")
+    parents = [
+        generate_grid(
+            "R02B02",
+            radius=radius,
+            optimize_global=False,
+        )
+        for radius in (0.5, 2.0)
+    ]
+    cuts = [
+        cut_grid(parent, CutGridSpec(regions=region, selection=selection))
+        for parent in parents
+    ]
+    limited_spec = LimitedAreaGridSpec(
+        parent="R02B02",
+        region=region,
+        construction="cut_final",
+        selection=selection,
+        local_optimization_iterations=0,
+    )
+    limited = [
+        generate_grid(
+            limited_spec,
+            radius=radius,
+            optimize_global=False,
+        )
+        for radius in (0.5, 2.0)
+    ]
+
+    for left, right in (cuts, limited):
+        assert left.dims == right.dims
+        assert left.metadata["uuidOfHGrid"] == right.metadata["uuidOfHGrid"]
+        assert np.array_equal(left.cells, right.cells)
+        assert np.array_equal(left.edges, right.edges)
+        assert np.array_equal(
+            left.refinement["parent_cell_index"],
+            right.refinement["parent_cell_index"],
+        )
+
+
 def test_clipped_and_mirrored_boundary_metric_closures_are_explicit():
     parent = generate_grid("R02B01", optimize_global=False)
     region = Region.circle(lon=0.0, lat=0.0, radius_degrees=45.0)

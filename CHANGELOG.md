@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Make circumradius-based regional selection independent of the Cartesian
+  display radius, preserving topology and UUID identity across display scales.
+- Preserve planar domain extents and periodic layout when exporting cut grids.
+- Keep the module-level `grid_uuid()` helper consistent with generated R3+
+  UUIDs and with `sphere_radius` supplied through an options mapping.
+- Extend `check_grid()` structural validation to verify cell/edge incidence and
+  reciprocal `cell_edges`/`edge_cells` tables.
 - Write physical `domain_length` and `domain_height` geometry attributes for
   channel, parallelogram, and ragged planar grids instead of spherical fallback
   dimensions.

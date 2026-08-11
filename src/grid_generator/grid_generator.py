@@ -1339,16 +1339,23 @@ def cut_grid(
         parent_uuid=grid.metadata["uuidOfHGrid"],
     )
     geometry_spec = grid.geometry_spec or grid.spec
-    crs_keys = (
+    source_geometry_keys = (
         "crs_id",
         "crs_name",
         "grid_mapping_name",
         "ellipsoid_name",
         "semi_major_axis",
         "inverse_flattening",
+        "domain_length",
+        "domain_height",
+        "periodic_layout",
     )
     metadata.update(
-        {key: grid.metadata[key] for key in crs_keys if key in grid.metadata}
+        {
+            key: grid.metadata[key]
+            for key in source_geometry_keys
+            if key in grid.metadata
+        }
     )
     metadata.update(
         {
@@ -3331,30 +3338,17 @@ def _canonicalize_payload(value: Any) -> Any:
 def grid_uuid(
     grid_name: str,
     *,
-    sphere_radius: float = EARTH_RADIUS_M,
+    sphere_radius: float | _UnsetOption = _OPTION_UNSET,
     options: IconGridOptions | Mapping[str, Any] | None = None,
 ) -> str:
-    canonical_sphere_radius = finite_float_option("sphere_radius", sphere_radius)
-    if canonical_sphere_radius <= 0.0:
-        raise ValueError("sphere_radius must be positive")
+    """Return the UUID generated for a global grid specification and options."""
     grid_options = _resolve_options(options)
-    if sphere_radius != EARTH_RADIUS_M:
+    if not isinstance(sphere_radius, _UnsetOption):
+        canonical_sphere_radius = finite_float_option("sphere_radius", sphere_radius)
+        if canonical_sphere_radius <= 0.0:
+            raise ValueError("sphere_radius must be positive")
         grid_options = replace(grid_options, sphere_radius=canonical_sphere_radius)
-    payload = {
-        "generator": "grid_generator",
-        "grid": parse_grid_spec(grid_name).name,
-        "sphere_radius": _canonical_float(canonical_sphere_radius),
-        "global_grid": _canonicalize_payload(asdict(grid_options.global_grid)),
-        "global_optimization": _canonicalize_payload(
-            asdict(grid_options.global_optimization)
-        ),
-    }
-    return str(
-        uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            json.dumps(payload, sort_keys=True, separators=(",", ":")),
-        )
-    )
+    return _spec_uuid(parse_grid_spec(grid_name), grid_options)
 
 
 def _canonical_float(value: float) -> float:

@@ -645,9 +645,11 @@ semantics.
 The diagnostic helpers have intentionally narrow meanings:
 
 - `check_grid()` checks core shapes, finite coordinates, index bounds,
-  duplicate edges, boundary presence, and the expected closed-mesh Euler
-  characteristic. `ok=True` is structural validation, not proof of positive
-  areas, correct scientific metrics, or suitability for a numerical scheme.
+  duplicate edges, reciprocal cell/edge incidence, agreement between cell
+  vertices and their edges, boundary presence, and the expected closed-mesh
+  Euler characteristic. `ok=True` is structural validation, not proof of
+  positive areas, correct scientific metrics, or suitability for a numerical
+  scheme.
 - `grid_statistics()` summarizes counts plus extrema and means of existing area
   and edge-length fields.
 - `triangle_properties()` applies the Euclidean cosine rule to stored edge
