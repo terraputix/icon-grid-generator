@@ -2,11 +2,10 @@
 
 Status: implemented for spherical limited-area generation and direct cuts.
 
-The implementation is informed by the ICON-CH1-EPS and ICON-CH2-EPS
-regeneration experiment and by the ICON-NWP and icontools source. It does not
-try to reproduce the historical grids exactly. The defaults instead favor
-coverage, finite metrics, structural provenance, useful ICON ordering, and
-lower generation cost.
+The implementation is informed by ICON-NWP's grid-reader and numerical-operator
+contracts. The defaults retain deterministic Python implementation, finite
+metrics, structural provenance, and valid ICON ordering. Bit-for-bit files and
+UUID reuse are not goals.
 
 ## Requirements and choices
 
@@ -25,11 +24,11 @@ Other properties are scientific or numerical choices:
 | Choice | Default | Alternative |
 | --- | --- | --- |
 | Construction | select at B-1 and refine once | cut the complete final grid |
-| Cell inclusion | center or vertex overlaps region | center inside region |
+| Cell inclusion | circumdisk intersection | center or center/vertex overlap |
 | Mask cleanup | remove one-neighbor ears | preserve the raw predicate result |
 | Boundary dual | clipped at the physical edge | mirrored ghost closure |
 | Entity ordering | ICON boundary prefixes | source order for in-memory analysis |
-| Local optimization | fixed-boundary spring, 250 iteration cap | zero iterations |
+| Local optimization | fixed-boundary spring, 2,000 iteration cap | explicit lower cap or zero iterations |
 
 Historical count reconciliation, opaque rectangle scaling, old UUID reuse,
 omission of useful metadata, and reproduction of non-finite values are not
@@ -41,7 +40,7 @@ The public policy signatures are:
 
 ```text
 RegionSelectionOptions(
-    inclusion="overlap",          # or "center"
+    inclusion="circumradius",     # or "overlap" / "center"
     cleanup="remove_ears",        # or "none"
     buffer_rings=0,
 )
@@ -88,7 +87,7 @@ the global parent and is not CH-specific.
 For a requested `R<n>B<k>` grid with `k > 0`, the default path:
 
 1. generates the global `R<n>B<k-1>` parent with the requested global options;
-2. evaluates the region on parent centers and vertices;
+2. evaluates the region using cell circumcenters and circumradii;
 3. applies deterministic cleanup and optional neighbor-ring buffering;
 4. compacts the selected parent with typed NumPy index arrays;
 5. bisects the open parent once;
@@ -117,15 +116,18 @@ index.
 
 ## Region selection
 
-`inclusion="overlap"` retains a cell when its center or any of its vertices is
-inside the region. It is a conservative improvement over center-only selection
-for the supported smooth model domains, though it is not a full spherical
-polygon-intersection solver. `inclusion="center"` preserves the narrower and
-sometimes useful center-defined domain interpretation.
+`inclusion="circumradius"` is the default. For circles and longitude/latitude
+boxes it applies a cell-circumcenter test expanded by the cell circumradius.
+The same rule, followed by default ear cleanup, gives stable entity sets across
+the tested R2B2-R2B5 circular, unrotated-box, and rotated-pole-box grids.
+`inclusion="overlap"` retains a cell when its center or
+any vertex is inside the region; `inclusion="center"` preserves the narrower
+center-defined interpretation. Package-specific polygons use overlap semantics
+because they do not have a directly corresponding circumdisk predicate.
 
 The default cleanup removes raw cells with at most one selected edge neighbor.
-This avoids one-cell ears and follows the useful topological part of the
-icontools cleanup without adding historical count tuning. `cleanup="none"`
+This prevents isolated one-cell protrusions and stabilizes domain boundaries.
+`cleanup="none"`
 preserves the exact predicate result.
 
 Selection and expansion use boolean masks and typed arrays rather than Python
@@ -161,7 +163,7 @@ mirrored one.
 
 ## ICON boundary indexing
 
-The boundary indexer follows the confirmed icontools convention:
+The boundary indexer follows the established ICON grid convention:
 
 1. vertices on one-cell edges receive level one;
 2. vertex levels propagate inward through incident cells up to the configured
@@ -197,6 +199,14 @@ construction-parent name and UUID, center/subcenter fields,
 the compact immediate parent against which the structural indices are defined;
 `construction_parent_uuid` retains the full global source identity.
 
+Spherical limited-area and spherical cut files retain ICON
+`grid_geometry = 1`. ICON defines geometry value `3` as a planar channel, not
+as a generic limited-area grid. A separate `open_boundary = 1` attribute drives
+the package's regional validation and missing-neighbor encoding without causing
+ICON to disable spherical behavior. This distinction also lets the
+Cartesian-free `"icon"` field profile select ICON's spherical reconstruction
+path.
+
 ## Scaling and remaining work
 
 The default avoids constructing the four-times-larger final-resolution global
@@ -224,10 +234,11 @@ Maintained tests cover:
 - boundary controls, permutations, and start/end tables;
 - clipped versus mirrored lengths and distances;
 - finite metric and topology invariants after generation and transforms;
-- `-1` missing-index NetCDF encoding; and
+- `-1` missing-index NetCDF encoding;
+- ICON geometry-enum behavior for spherical regional and planar grids; and
 - unchanged global and periodic contracts.
 
-The CH1/CH2 files remain manual large acceptance cases and are not repository
+Large operational domains remain manual acceptance cases and are not repository
 fixtures. A newly generated horizontal-grid UUID requires matching EXTPAR,
 vertical-grid, initial-condition, and lateral-boundary products before an
 operational ICON run.

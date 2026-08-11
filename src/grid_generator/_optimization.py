@@ -10,6 +10,11 @@ import uuid
 import numpy as np
 
 from . import _accelerated
+from ._grid_semantics import (
+    SPHERE_GEOMETRY,
+    is_icon_open_boundary,
+    is_planar_geometry,
+)
 from ._validation import finite_float_option
 
 
@@ -155,7 +160,10 @@ def optimize_global_grid(grid: Any, options: Any = None) -> Any:
     opts = _GlobalOptimizationOptions(method="spring") if options is None else resolve_global_optimization_options(options)
     if opts.method == "none" or opts.iterations == 0:
         return grid
-    if grid.metadata.get("grid_geometry") != 1:
+    if (
+        grid.metadata.get("grid_geometry") != SPHERE_GEOMETRY
+        or is_icon_open_boundary(grid.metadata)
+    ):
         raise ValueError("global optimization requires a spherical global grid")
     return _run_global_optimization(grid, opts, record_transform=True)
 
@@ -512,10 +520,7 @@ def _rebuild_grid(
 
 
 def _uses_planar_projection(grid: Any) -> bool:
-    return (
-        grid.metadata.get("grid_geometry") == 2
-        or grid.metadata.get("source_grid_geometry") == 2
-    )
+    return is_planar_geometry(grid.metadata)
 
 
 def _rebuild_spherical_grid(

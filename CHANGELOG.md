@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Use equal-arc great-circle subdivision for every `R<n>B0` root, applying the
+  same spherical construction to roots above two as well as R1/R2.
+  R3+ UUID payloads identify the corrected construction; unchanged R1/R2 UUIDs
+  are preserved.
+- Make circumcenter/circumradius regional inclusion the default while
+  retaining explicit center and center-or-vertex alternatives.
+- Use a 2,000-iteration limit for default regional spring relaxation;
+  convergence stopping remains active and callers can request a lower cap.
+- Include the established `quadrilateral_area`, `vlon_vertices`, and `vlat_vertices`
+  compatibility variables in the default full NetCDF schema.
+- Export spherical limited-area and cut grids with ICON's spherical
+  `grid_geometry=1`, separating strict regional behavior into an
+  `open_boundary` attribute so ICON does not treat them as planar channels.
+- Emit the documented ICON geometry codes for planar tori (`2`), channels
+  (`3`), and general planar grids (`4`), including matching Cartesian and
+  metric handling.
+
 ## 0.6.2 - 2026-08-09
 
 - Make accelerated spring reductions deterministic across Numba thread counts

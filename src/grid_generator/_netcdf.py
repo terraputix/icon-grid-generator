@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from ._grid_semantics import is_icon_open_boundary, is_planar_geometry
+
 IconNetcdfField = tuple[str, tuple[str, ...], Any, dict[str, Any]]
 IconNetcdfFieldSelection = str | Iterable[str]
 
@@ -100,6 +102,9 @@ ICON_NETCDF_FIELD_NAMES = (
     "child_cell_id",
     "child_edge_index",
     "child_edge_id",
+    "quadrilateral_area",
+    "vlon_vertices",
+    "vlat_vertices",
 )
 
 _ICON4PY_FIELDS = frozenset(
@@ -220,8 +225,16 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
         "long_name": "center latitude",
         "standard_name": "grid_latitude",
     },
-    "vlon": {"long_name": "vertex longitude", "standard_name": "grid_longitude"},
-    "vlat": {"long_name": "vertex latitude", "standard_name": "grid_latitude"},
+    "vlon": {
+        "bounds": "vlon_vertices",
+        "long_name": "vertex longitude",
+        "standard_name": "grid_longitude",
+    },
+    "vlat": {
+        "bounds": "vlat_vertices",
+        "long_name": "vertex latitude",
+        "standard_name": "grid_latitude",
+    },
     "elon": {
         "bounds": "elon_vertices",
         "long_name": "edge midpoint longitude",
@@ -273,6 +286,12 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
         **EDGE_COORD_ATTRS,
         "long_name": "area around the edge formed by the two adjacent triangles",
     },
+    "quadrilateral_area": {
+        **EDGE_COORD_ATTRS,
+        "long_name": "legacy quadrilateral area placeholder",
+    },
+    "vlon_vertices": {"long_name": "vertex-neighbor longitude bounds"},
+    "vlat_vertices": {"long_name": "vertex-neighbor latitude bounds"},
     "orientation_of_normal": {"long_name": "orientations of normals to triangular cell edges"},
     "edge_system_orientation": {**EDGE_COORD_ATTRS, "long_name": "edge system orientation"},
     "edge_orientation": {"long_name": "edge orientation"},
@@ -444,7 +463,7 @@ def _require_complete_icon_grid(grid: Any) -> None:
     }.items():
         if not fields:
             raise ValueError(f"ICON NetCDF export requires populated {name}")
-    if grid.metadata.get("grid_geometry") == 3:
+    if is_icon_open_boundary(grid.metadata):
         _require_valid_open_icon_grid(grid)
 
 
@@ -590,6 +609,10 @@ def _icon_fields(
             lambda: _hierarchy_fields(grid, selected_fields),
             frozenset(ICON_NETCDF_FIELD_NAMES[76:85]),
         ),
+        (
+            lambda: _legacy_grid_description_fields(grid),
+            frozenset(ICON_NETCDF_FIELD_NAMES[85:88]),
+        ),
     )
     for build, group in builders:
         if group.isdisjoint(selected_fields):
@@ -636,7 +659,7 @@ def _connectivity_fields(grid: Any) -> Iterator[IconNetcdfField]:
     connectivity = grid.icon_connectivity
     yield "edge_of_cell", ("nv", "cell"), connectivity["c2e"].T + 1, {}
     yield "vertex_of_cell", ("nv", "cell"), grid.cells.T + 1, {}
-    open_grid = grid.metadata.get("grid_geometry") == 3
+    open_grid = is_icon_open_boundary(grid.metadata)
     neighbor = (
         np.where(connectivity["c2c"] < 0, -1, connectivity["c2c"] + 1)
         if open_grid
@@ -661,12 +684,27 @@ def _connectivity_fields(grid: Any) -> Iterator[IconNetcdfField]:
         yield name, ("ne", "vertex"), values.T, {}
 
 
+def _legacy_grid_description_fields(grid: Any) -> Iterator[IconNetcdfField]:
+    """Emit established grid-description fields retained for compatibility."""
+    yield "quadrilateral_area", ("edge",), np.zeros(grid.dims["edge"]), {}
+    neighbors = np.asarray(grid.icon_connectivity["v2v"])
+    valid = neighbors > 0
+    indices = np.maximum(neighbors - 1, 0)
+    yield "vlon_vertices", ("vertex", "ne"), np.where(
+        valid,
+        np.radians(grid.vertex_lon[indices]),
+        0.0,
+    ), {"units": "radian"}
+    yield "vlat_vertices", ("vertex", "ne"), np.where(
+        valid,
+        np.radians(grid.vertex_lat[indices]),
+        0.0,
+    ), {"units": "radian"}
+
+
 def _metric_fields(grid: Any) -> list[IconNetcdfField]:
     geometry = grid.geometry
-    is_planar = (
-        grid.metadata.get("grid_geometry") == 2
-        or grid.metadata.get("source_grid_geometry") == 2
-    )
+    is_planar = is_planar_geometry(grid.metadata)
     edgequad_normalizer = 1.0 if is_planar else grid.options.sphere_radius**2
     edgequad_attrs = (
         {"units": "m2"}
@@ -720,7 +758,7 @@ def _static_surface_fields(grid: Any) -> Iterator[IconNetcdfField]:
 
 
 def _cartesian_fields(grid: Any) -> Iterator[IconNetcdfField]:
-    if grid.metadata.get("grid_geometry") == 2:
+    if is_planar_geometry(grid.metadata):
         unit_vertices = grid.vertices
     else:
         unit_vertices = _gg()._normalize_rows(grid.vertices)
@@ -732,7 +770,7 @@ def _cartesian_fields(grid: Any) -> Iterator[IconNetcdfField]:
 
     unit_centers = (
         grid.cell_center_xyz
-        if grid.metadata.get("grid_geometry") == 2
+        if is_planar_geometry(grid.metadata)
         else _gg()._normalize_rows(grid.cell_center_xyz)
     )
     yield "cell_circumcenter_cartesian_x", ("cell",), unit_centers[:, 0], attrs
@@ -742,7 +780,7 @@ def _cartesian_fields(grid: Any) -> Iterator[IconNetcdfField]:
 
     unit_edge_centers = (
         grid.edge_center_xyz
-        if grid.metadata.get("grid_geometry") == 2
+        if is_planar_geometry(grid.metadata)
         else _gg()._normalize_rows(grid.edge_center_xyz)
     )
     yield "edge_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], attrs

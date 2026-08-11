@@ -170,10 +170,11 @@ def test_generate_grid_accepts_all_public_grid_specs():
     assert global_grid.metadata["grid_geometry"] == 1
     assert torus_grid.metadata["grid_geometry"] == 2
     assert stretched_grid.metadata["grid_geometry"] == 2
-    assert channel_grid.metadata["grid_geometry"] == 2
-    assert parallelogram_grid.metadata["grid_geometry"] == 2
-    assert ragged_grid.metadata["grid_geometry"] == 2
-    assert limited_area_grid.metadata["grid_geometry"] == 3
+    assert channel_grid.metadata["grid_geometry"] == 3
+    assert parallelogram_grid.metadata["grid_geometry"] == 4
+    assert ragged_grid.metadata["grid_geometry"] == 4
+    assert limited_area_grid.metadata["grid_geometry"] == 1
+    assert limited_area_grid.metadata["open_boundary"] == 1
 
 
 @pytest.mark.parametrize(

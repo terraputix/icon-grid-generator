@@ -40,10 +40,11 @@ def assert_valid_grid_math(
         assert grid.metadata["grid_geometry"] == 2
         assert grid.dims["vertex"] - grid.dims["edge"] + grid.dims["cell"] == 0
     elif geometry == "open_planar":
-        assert grid.metadata["grid_geometry"] == 2
+        assert grid.metadata["grid_geometry"] in {3, 4}
         assert grid.dims["vertex"] - grid.dims["edge"] + grid.dims["cell"] in {0, 1}
     else:
-        assert grid.metadata["grid_geometry"] == 3
+        assert grid.metadata["grid_geometry"] == 1
+        assert grid.metadata["open_boundary"] == 1
         assert np.all(grid.refinement["parent_cell_index"] > 0)
         assert np.all(grid.refinement["parent_edge_index"] > 0)
         assert np.all(grid.refinement["parent_vertex_index"] != 0)

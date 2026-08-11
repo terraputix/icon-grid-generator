@@ -1,10 +1,10 @@
 # Design Notes
 
-The proposed architecture for fully functional limited-area and general
+The architecture for fully functional limited-area and general
 open-boundary ICON grids is documented separately in
 [Valid Limited-Area and Open-Boundary ICON Grids](limited-area-icon-design.md).
-It distinguishes correctness and current ICON-NWP requirements from optional
-icontools reproduction behavior.
+It distinguishes correctness and current ICON-NWP requirements from explicit
+alternative scientific policies.
 
 ICON Grid Generator builds in-memory `IconGrid` objects through a small,
 deterministic pipeline:
@@ -30,6 +30,10 @@ construct NetCDF-only fields in bounded groups. This path returns the output
 - `IconGrid.dims` and array shapes derive deterministically from the spec.
 - Internal topology arrays are zero-based; exported NetCDF index fields are
   one-based where ICON expects that convention.
+- ICON `grid_geometry` describes only coordinate geometry. Spherical global,
+  limited-area, and cut grids use `1`; planar torus, channel, and general-plane
+  grids use `2`, `3`, and `4`. The independent `open_boundary` flag selects
+  strict regional connectivity and boundary validation.
 - Metadata and grid UUIDs are stable for unchanged canonical inputs.
 
 ## Feature Boundaries
@@ -52,6 +56,8 @@ construct NetCDF-only fields in bounded groups. This path returns the output
 - Global grid generation uses staged spring relaxation by default; raw
   bisection remains available with `optimize_global=False` for diagnostics and
   topology checks.
+- Root grids subdivide every icosahedron edge and face row by equal great-circle
+  arc length for every root.
 - Planar triangular variants share one builder pipeline. The spec object
   carries variant flags such as `periodic` and `periodic_x`; `_planar.py`
   dispatches geometry, topology, and metric behavior from those flags instead
@@ -99,6 +105,10 @@ construct NetCDF-only fields in bounded groups. This path returns the output
   `normalization` attribute. In-memory `IconGrid.geometry` retains physical
   square-metre values. This compatibility convention is not applied to planar
   grids.
+- The default full schema includes the established `quadrilateral_area`,
+  `vlon_vertices`, and `vlat_vertices` variables.
+  The legacy quadrilateral field remains an all-zero placeholder; ICON uses
+  `edgequad_area` for the actual edge-quadrilateral metric.
 - Xarray public connectivity is zero-based with `-1` for missing neighbors;
   parent-provenance arrays remain one-based with `0` for no parent. Variables
   carry explicit `start_index` and `missing_value` attributes.
@@ -174,10 +184,11 @@ the update, so callers remain responsible for checking scientific quality.
 - The implementation assumes closed global triangular meshes have vertex
   valence at most six. Limited-area and planar grids use separate open-mesh
   paths where boundary sentinels are expected.
-- Longitude/latitude rectangles and polygons are center-selection predicates
-  evaluated in a wrapped equirectangular lon/lat plane. Circles use great-circle
-  angular distance. Use small regional rectangles/polygons away from the poles,
-  or provide an explicit scientific comparison for polar and very large areas.
+- Regional circles and longitude/latitude boxes default to circumdisk
+  intersection using cell circumcenters and circumradii. Explicit center and
+  center-or-vertex policies remain available. Package-specific polygons use
+  overlap semantics in a wrapped lon/lat plane; use small polygons away from
+  the poles or provide an explicit scientific comparison for polar domains.
 - Planar `lon`/`lat` fields are normalized compatibility and visualization
   coordinates, not a geographic CRS. Scientific planar calculations should use
   Cartesian coordinates and metric arrays.
@@ -224,6 +235,11 @@ Checkpoint and NetCDF columns are logical sizes at completion.
 
 ### Full output
 
+The timings below were measured for the former 85-field full schema. The
+current 88-field schema adds 75 GiB at R2B12, for an estimated 1,122.50 GiB
+file. Export time has not yet been remeasured and the historical timings are
+retained only as a scaling baseline.
+
 #### Runtime
 
 | Grid | Resolution | Cells | Generation | NetCDF export | Total |
@@ -242,7 +258,7 @@ Checkpoint and NetCDF columns are logical sizes at completion.
 | `R02B09` | 6.48 GiB | 3.20 GiB | 16.37 GiB |
 | `R02B10` | 24.00 GiB | 12.92 GiB | 65.47 GiB |
 | `R02B11` | 93.78 GiB | 51.83 GiB | 261.88 GiB |
-| `R02B12` | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+| `R02B12` | 328.18 GiB | 162.46 GiB | about 1,122.50 GiB |
 
 ### Reduced output
 

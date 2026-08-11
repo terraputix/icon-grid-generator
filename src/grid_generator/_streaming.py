@@ -814,6 +814,10 @@ def _icon_variable_definitions() -> list[
     ):
         add(name, dims, int32)
 
+    add("quadrilateral_area", ("edge",), float64)
+    add("vlon_vertices", ("vertex", "ne"), float64, radians)
+    add("vlat_vertices", ("vertex", "ne"), float64, radians)
+
     return definitions
 
 
@@ -1221,7 +1225,8 @@ def _write_vertices_of_vertex(
     grid: _CompactGlobalGrid,
     chunk_size: int,
 ) -> None:
-    if "vertices_of_vertex" not in variables:
+    names = {"vertices_of_vertex", "vlon_vertices", "vlat_vertices"}
+    if names.isdisjoint(variables):
         return
     from . import grid_generator as gg
 
@@ -1241,8 +1246,28 @@ def _write_vertices_of_vertex(
         v2v,
         accelerator=grid.options.accelerator,
     )
+    needs_bounds = "vlon_vertices" in variables or "vlat_vertices" in variables
+    if needs_bounds:
+        vertex_lon, vertex_lat = gg._lon_lat(grid.vertices)
     for section in _chunk_slices(grid.dims["vertex"], chunk_size):
-        variables["vertices_of_vertex"][:, section] = v2v[section].T
+        values = v2v[section]
+        if "vertices_of_vertex" in variables:
+            variables["vertices_of_vertex"][:, section] = values.T
+        if needs_bounds:
+            valid = values > 0
+            indices = np.maximum(values - 1, 0)
+            if "vlon_vertices" in variables:
+                variables["vlon_vertices"][section, :] = np.where(
+                    valid,
+                    np.radians(vertex_lon[indices]),
+                    0.0,
+                )
+            if "vlat_vertices" in variables:
+                variables["vlat_vertices"][section, :] = np.where(
+                    valid,
+                    np.radians(vertex_lat[indices]),
+                    0.0,
+                )
 
 
 def _write_cells_of_vertex(
@@ -1544,6 +1569,7 @@ def _write_static_fields(
         ("edge_elevation", "edge"),
         ("cell_sea_land_mask", "cell"),
         ("edge_sea_land_mask", "edge"),
+        ("quadrilateral_area", "edge"),
     ):
         if name in variables:
             for section in _chunk_slices(grid.dims[dimension], chunk_size):

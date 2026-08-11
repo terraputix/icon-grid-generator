@@ -45,6 +45,11 @@ print(grid.name, grid.dims)
 grid.to_netcdf("icon_grid_R02B04.nc")
 ```
 
+NetCDF `grid_geometry` follows ICON's geometry enum: spherical global and
+limited-area grids use `1`, planar tori use `2`, planar channels use `3`, and
+general planar grids use `4`. Regional spherical files carry a separate
+`open_boundary=1` attribute; openness is not a coordinate-geometry type.
+
 Generate a large global grid directly to NetCDF:
 
 ```py
@@ -63,8 +68,10 @@ This export-first path supports global grids only. `R2B8` is a practical first
 large-grid example at about 9.86 km resolution; check the resource tables before
 requesting finer grids.
 
-The default `full` profile contains 85 fields. `reduced` contains the 46-field
-union required by the standard ICON and icon4py global-grid readers. Dedicated
+The default `full` profile contains 88 fields, including the established
+`quadrilateral_area`, `vlon_vertices`, and `vlat_vertices` fields.
+`reduced` contains the 46-field union required by the standard ICON and
+icon4py global-grid readers. Dedicated
 `icon` and `icon4py` profiles and exact custom field lists are also available.
 Place large outputs and checkpoint directories on disk-backed storage. Each
 checkpoint manifest atomically selects a complete array snapshot, so an
@@ -84,8 +91,12 @@ grid whose one-based exported identifiers fit signed 32-bit integers.
 
 | R2B12 output | Generation | NetCDF export | Total | Peak RSS | Checkpoints | NetCDF |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Full | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+| Full (85-field timing) | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
 | Reduced | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
+
+The full timing predates the three added grid-description fields. The
+current 88-field R2B12 payload is approximately 1,122.5 GiB; it requires a new
+scaling run before quoting an updated export time.
 
 See [Performance and Scaling](https://ofuhrer.github.io/icon-grid-generator/design/#performance-and-scaling)
 for R2B8–R2B12 measurements, component timings, validation details, and all

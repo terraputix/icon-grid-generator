@@ -87,12 +87,15 @@ default is the complete schema.
 
 | Profile | Fields | Consumer scope | Approximate R2B12 payload |
 | --- | ---: | --- | ---: |
-| `"full"` | 85 | Complete schema for general exchange | 1,047.5 GiB |
+| `"full"` | 88 | Complete schema for general exchange | about 1,122.5 GiB |
 | `"reduced"` | 46 | Union required by standard ICON and icon4py global-grid readers | 485 GiB |
 | `"icon"` | 38 | Standard ICON triangular-grid importer | 410 GiB |
 | `"icon4py"` | 26 | icon4py spherical `GridManager` | 337.5 GiB |
 
-The reduced and ICON profiles omit the complete Cartesian bundle so ICON uses
+The full profile includes the three established compatibility fields
+`quadrilateral_area`, `vlon_vertices`, and `vlat_vertices`; the first is an
+all-zero compatibility placeholder used by established grid descriptions. The
+reduced and ICON profiles omit the complete Cartesian bundle so ICON uses
 its existing reconstruction fallback; a partial Cartesian bundle is not
 emitted. These profiles cover the standard global readers, not every ocean,
 coupling, output-copying, remapping, or institutional tool. Use `"full"` for
@@ -179,19 +182,21 @@ Use `Region` constructors for limited-area extraction and cutting:
 
 Regional policies are explicit public values:
 
-- `RegionSelectionOptions(inclusion="overlap", cleanup="remove_ears", buffer_rings=0)`
-  controls coverage, mask cleanup, and selection expansion. Use `"center"` or
-  `"none"` for the narrower/raw alternatives.
+- `RegionSelectionOptions(inclusion="circumradius", cleanup="remove_ears", buffer_rings=0)`
+  controls coverage, mask cleanup, and selection expansion. The default uses
+  circumdisk intersection for circles and lon/lat boxes.
+  Use `"overlap"`, `"center"`, or `cleanup="none"` only for an explicitly
+  different coverage/raw-mask interpretation.
 - `OpenBoundaryOptions(metric_closure="clipped", indexing_depth=14, ordering="icon")`
   controls physical versus mirrored dual closure and ICON boundary indexing.
   Source ordering is intended for in-memory analysis and cannot be exported as
   a valid ICON regional NetCDF.
 - `Region.polygon(((lon0, lat0), (lon1, lat1), ...))`
 
-Longitudes and latitudes are in degrees. Region predicates select cells by cell
-center. Circles use great-circle angular distance. Rectangles and polygons use
-a wrapped equirectangular lon/lat projection, so they are intended for regional
-selection rather than exact large-area or polar spherical polygons. For a
+Longitudes and latitudes are in degrees. The default predicate expands circles
+and lon/lat boxes by each cell's spherical circumradius.
+Package-specific oriented rectangles use the analogous expanded local-plane
+predicate, while polygons retain center-or-vertex overlap semantics. For a
 longitude box, `lon_min > lon_max` intentionally selects across the antimeridian.
 
 ## Options
@@ -477,6 +482,25 @@ Consequences that matter in downstream code:
   compatibility and is dimensionless. The in-memory and xarray value remains
   the physical square-metre value. Planar `edgequad_area` is not normalized.
 
+### ICON geometry metadata
+
+`grid_geometry` uses ICON's geometry enum and is independent of whether a mesh
+has an open boundary:
+
+| Grid family | `grid_geometry` | `open_boundary` |
+| --- | ---: | ---: |
+| Global spherical | 1 | absent |
+| Limited-area or cut spherical | 1 | 1 |
+| Planar torus, including stretched torus | 2 | absent |
+| Planar channel | 3 | absent |
+| General planar parallelogram or ragged grid | 4 | absent |
+| Cut of a planar grid | inherited from its source | 1 |
+
+The separate flag matters to ICON: geometry value `3` means planar channel and
+would disable spherical behavior if used for a regional spherical grid. The
+package uses `open_boundary=1` to enable strict regional ordering, metric, and
+missing-neighbor checks while preserving the correct coordinate geometry.
+
 ## Grid Object
 
 `IconGrid` is the in-memory object returned by `generate_grid`. It exposes:
@@ -547,9 +571,10 @@ cut = cut_grid(parent, Region.circle(lon=8.0, lat=47.0, radius_degrees=10.0))
 
 Selection is cell based and deterministic:
 
-- The default overlap policy retains cells whose center or any vertex satisfies
-  a region predicate. The center-only policy is available explicitly. Multiple
-  regions are combined by union.
+- The default circumradius policy evaluates spherical cell circumcenters and
+  circumradii, then removes one-neighbor ears. The center-only and
+  center-or-vertex overlap policies are available explicitly. Multiple regions
+  are combined by union.
 - `mode="keep"` retains the selected union. `mode="remove"` takes its
   complement.
 - `RegionSelectionOptions.buffer_rings=N` then adds `N` cell-neighbor rings.

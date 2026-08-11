@@ -130,6 +130,7 @@ EXPECTED_NETCDF_VARIABLE_DIMS = {
     "parent_vertex_index": ("vertex",),
     "phys_cell_id": ("cell",),
     "phys_edge_id": ("edge",),
+    "quadrilateral_area": ("edge",),
     "refin_c_ctrl": ("cell",),
     "refin_e_ctrl": ("edge",),
     "refin_v_ctrl": ("vertex",),
@@ -140,7 +141,9 @@ EXPECTED_NETCDF_VARIABLE_DIMS = {
     "vertex_of_cell": ("nv", "cell"),
     "vertices_of_vertex": ("ne", "vertex"),
     "vlat": ("vertex",),
+    "vlat_vertices": ("vertex", "ne"),
     "vlon": ("vertex",),
+    "vlon_vertices": ("vertex", "ne"),
     "zonal_normal_dual_edge": ("edge",),
     "zonal_normal_primal_edge": ("edge",),
 }

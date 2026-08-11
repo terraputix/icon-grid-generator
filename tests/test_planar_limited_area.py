@@ -20,6 +20,7 @@ from grid_generator.transforms import (
     DiffusionOptions,
     OptimizationOptions,
     diffuse_grid,
+    optimize_global_grid,
     optimize_grid,
 )
 
@@ -200,21 +201,32 @@ def test_open_planar_dual_areas_partition_primal_area(spec):
 
 
 @pytest.mark.parametrize(
-    "spec",
+    ("spec", "grid_geometry"),
     [
-        StretchedTorusGridSpec(nx=4, ny=3, edge_length=2.0, stretch_x=1.5, stretch_y=0.75),
-        ChannelGridSpec(nx=4, ny=3, edge_length=2.0),
-        ParallelogramGridSpec(nx=4, ny=3, edge_length=2.0, shear=0.25),
-        RaggedOrthogonalGridSpec(nx=4, ny=3, dx=2.0, dy=1.5),
+        (
+            StretchedTorusGridSpec(
+                nx=4,
+                ny=3,
+                edge_length=2.0,
+                stretch_x=1.5,
+                stretch_y=0.75,
+            ),
+            2,
+        ),
+        (ChannelGridSpec(nx=4, ny=3, edge_length=2.0), 3),
+        (ParallelogramGridSpec(nx=4, ny=3, edge_length=2.0, shear=0.25), 4),
+        (RaggedOrthogonalGridSpec(nx=4, ny=3, dx=2.0, dy=1.5), 4),
     ],
 )
-def test_planar_grid_variants_have_consistent_triangular_topology(spec):
+def test_planar_grid_variants_have_consistent_triangular_topology(
+    spec, grid_geometry
+):
     grid = generate_grid(spec)
 
     assert grid.dims["cell"] == spec.expected_cells
     assert grid.dims["vertex"] == spec.expected_vertices
     assert grid.dims["edge"] == spec.expected_edges
-    assert grid.metadata["grid_geometry"] == 2
+    assert grid.metadata["grid_geometry"] == grid_geometry
     assert grid.cells.shape == (spec.expected_cells, 3)
     assert grid.edges.shape == (spec.expected_edges, 2)
     assert np.all((0 <= grid.cells) & (grid.cells < grid.dims["vertex"]))
@@ -252,7 +264,8 @@ def test_limited_area_grid_is_compact_boundary_ordered_and_parent_linked():
     parent_cells = grid.refinement["parent_cell_index"] - 1
 
     assert grid.name == "LAM_R02B01"
-    assert grid.metadata["grid_geometry"] == 3
+    assert grid.metadata["grid_geometry"] == 1
+    assert grid.metadata["open_boundary"] == 1
     assert grid.metadata["parent_grid_name"] == "R02B01"
     assert grid.metadata["boundary_depth_index"] == 14
     assert grid.metadata["selection_buffer_rings"] == 1
@@ -277,6 +290,8 @@ def test_limited_area_grid_is_compact_boundary_ordered_and_parent_linked():
     assert np.min(grid.refinement["refin_c_ctrl"]) == 1
     assert np.all(np.isfinite(grid.geometry["cell_area"]))
     assert np.all(np.isfinite(grid.geometry["edge_length"]))
+    with pytest.raises(ValueError, match="spherical global"):
+        optimize_global_grid(grid, {"method": "spring", "iterations": 1})
 
 
 def test_limited_area_default_uses_optimized_global_parent():
@@ -368,6 +383,69 @@ def test_overlap_selection_covers_center_selection_and_rotated_boxes():
         overlap.refinement["parent_cell_index"]
     )
     assert overlap.dims["cell"] > center.dims["cell"]
+
+
+def test_circumradius_selection_is_the_default():
+    parent = generate_grid("R02B02", optimize_global=False)
+    region = Region.circle(lon=0.0, lat=0.0, radius_degrees=30.0)
+    center = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            selection=RegionSelectionOptions(inclusion="center", cleanup="none"),
+        ),
+    )
+    compatible = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            selection=RegionSelectionOptions(
+                inclusion="circumradius",
+                cleanup="none",
+            ),
+        ),
+    )
+
+    assert set(center.refinement["parent_cell_index"]) <= set(
+        compatible.refinement["parent_cell_index"]
+    )
+    assert compatible.dims["cell"] > center.dims["cell"]
+    default = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=region,
+            selection=RegionSelectionOptions(cleanup="none"),
+        ),
+    )
+    assert np.array_equal(
+        default.refinement["parent_cell_index"],
+        compatible.refinement["parent_cell_index"],
+    )
+
+    polygon = Region.polygon(((-10.0, -10.0), (10.0, -10.0), (0.0, 10.0)))
+    polygon_grid = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=polygon,
+            selection=RegionSelectionOptions(cleanup="none"),
+        ),
+    )
+    assert polygon_grid.dims["cell"] > 0
+
+    dateline = cut_grid(
+        parent,
+        CutGridSpec(
+            regions=Region.lonlat_box(
+                lon_min=170.0,
+                lon_max=-170.0,
+                lat_min=-90.0,
+                lat_max=90.0,
+            ),
+            selection=RegionSelectionOptions(cleanup="none"),
+        ),
+    )
+    source_lon = parent.lon[dateline.refinement["parent_cell_index"] - 1]
+    assert np.all(np.abs(source_lon) > 100.0)
 
 
 def test_clipped_and_mirrored_boundary_metric_closures_are_explicit():

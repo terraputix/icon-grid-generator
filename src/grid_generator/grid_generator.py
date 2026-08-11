@@ -19,6 +19,12 @@ import uuid
 import numpy as np
 
 from ._io import IconNetcdfWriter
+from ._grid_semantics import (
+    PLANAR_CHANNEL_GEOMETRY,
+    PLANAR_GEOMETRY,
+    PLANAR_TORUS_GEOMETRY,
+    SPHERE_GEOMETRY,
+)
 from ._limited_area import LimitedAreaExtractor
 from ._optimization import (
     _GlobalGridOptions,
@@ -347,20 +353,24 @@ class RaggedOrthogonalGridSpec:
 class RegionSelectionOptions:
     """Policies used to select cells for an open regional grid.
 
-    ``inclusion="overlap"`` retains cells whose center or any vertex is in
-    the region, which avoids under-covering a requested domain.  ``"center"``
-    provides the narrower historical behavior.  ``cleanup="remove_ears"``
+    The default ``inclusion="circumradius"`` selects cells whose spherical
+    circumdisks intersect supported circle and longitude/latitude box regions.
+    ``"overlap"`` retains cells whose center or any vertex is in the region,
+    while ``"center"`` provides the narrower historical behavior.
+    ``cleanup="remove_ears"``
     removes one-cell protrusions while preserving every connected component;
     use ``"none"`` when the exact predicate result is required.
     """
 
-    inclusion: str = "overlap"
+    inclusion: str = "circumradius"
     cleanup: str = "remove_ears"
     buffer_rings: int = 0
 
     def __post_init__(self) -> None:
-        if self.inclusion not in {"overlap", "center"}:
-            raise ValueError("selection inclusion must be 'overlap' or 'center'")
+        if self.inclusion not in {"overlap", "center", "circumradius"}:
+            raise ValueError(
+                "selection inclusion must be 'overlap', 'center', or 'circumradius'"
+            )
         if self.cleanup not in {"remove_ears", "none"}:
             raise ValueError("selection cleanup must be 'remove_ears' or 'none'")
         if not isinstance(self.buffer_rings, int) or isinstance(
@@ -417,7 +427,7 @@ class LimitedAreaGridSpec:
     construction: str = "refine_last"
     selection: RegionSelectionOptions = field(default_factory=RegionSelectionOptions)
     boundary: OpenBoundaryOptions = field(default_factory=OpenBoundaryOptions)
-    local_optimization_iterations: int = 250
+    local_optimization_iterations: int = 2000
     name: str = ""
 
     def __post_init__(self) -> None:
@@ -1292,6 +1302,11 @@ def cut_grid(
     )
     metadata.update(
         {
+            "grid_geometry": grid.metadata.get(
+                "source_grid_geometry",
+                grid.metadata.get("grid_geometry", SPHERE_GEOMETRY),
+            ),
+            "open_boundary": 1,
             "source_grid_name": grid.name,
             "parent_grid_geometry": grid.metadata.get("grid_geometry"),
             "source_grid_geometry": grid.metadata.get(
@@ -1424,9 +1439,13 @@ def _sadourny_root_grid(
 
         values = [first]
         for cut in range(1, root):
-            point = (root - cut) * base_vertices[first] + cut * base_vertices[second]
+            point = _great_circle_interpolate(
+                base_vertices[first],
+                base_vertices[second],
+                cut / root,
+            )
             values.append(len(vertices))
-            vertices.append(_normalize(point))
+            vertices.append(point)
         values.append(second)
         directed_edge_vertices[key] = values
         directed_edge_vertices[reverse_key] = list(reversed(values))
@@ -1461,9 +1480,13 @@ def _sadourny_root_grid(
                 right = subdivide(a, c)[row]
                 row_vertices = [left]
                 for cut in range(1, row):
-                    point = (row - cut) * vertices[left] + cut * vertices[right]
+                    point = _great_circle_interpolate(
+                        vertices[left],
+                        vertices[right],
+                        cut / row,
+                    )
                     row_vertices.append(len(vertices))
-                    vertices.append(_normalize(point))
+                    vertices.append(point)
                 row_vertices.append(right)
                 v1 = row_vertices + [-1] * (root - row)
 
@@ -1510,6 +1533,23 @@ def _sadourny_root_grid(
         child_edge_cells=edge_cell_array,
     )
     return vertex_array, cell_array, provenance
+
+
+def _great_circle_interpolate(
+    first: np.ndarray,
+    second: np.ndarray,
+    fraction: float,
+) -> np.ndarray:
+    """Return an equal-arc spherical interpolation between two points."""
+    angle = float(np.arccos(np.clip(np.dot(first, second), -1.0, 1.0)))
+    sine = np.sin(angle)
+    if np.isclose(sine, 0.0):
+        return _normalize((1.0 - fraction) * first + fraction * second)
+    point = (
+        np.sin((1.0 - fraction) * angle) * first
+        + np.sin(fraction * angle) * second
+    ) / sine
+    return _normalize(point)
 
 
 def _cells_from_edge_cells(
@@ -2999,7 +3039,7 @@ def _metadata(
         "grid_root": getattr(spec, "root", 0),
         "grid_level": getattr(spec, "bisections", 0),
         "sphere_radius": options.sphere_radius,
-        "grid_geometry": 1,
+        "grid_geometry": SPHERE_GEOMETRY,
         "grid_cell_type": 3,
         "number_of_grid_used": 1,
         "center": 255,
@@ -3024,6 +3064,7 @@ def _metadata(
                 "spring_beta": options.global_grid.beta_spring,
                 "spring_maxit": options.global_grid.maxit,
                 "indexing_algorithm": options.global_grid.indexing_algorithm,
+                "root_subdivision": "great_circle",
                 "grid_mapping_name": "lat_long_on_sphere",
                 "global_grid": 1,
             }
@@ -3038,7 +3079,7 @@ def _metadata(
     if isinstance(spec, TorusGridSpec):
         metadata.update(
             {
-                "grid_geometry": 2,
+                "grid_geometry": PLANAR_TORUS_GEOMETRY,
                 "periodic": 1,
                 "crs_name": "Planar torus",
                 "grid_mapping_name": "cartesian",
@@ -3050,9 +3091,15 @@ def _metadata(
             }
         )
     elif isinstance(spec, _PLANAR_GRID_SPEC_TYPES):
+        if isinstance(spec, StretchedTorusGridSpec):
+            grid_geometry = PLANAR_TORUS_GEOMETRY
+        elif isinstance(spec, ChannelGridSpec):
+            grid_geometry = PLANAR_CHANNEL_GEOMETRY
+        else:
+            grid_geometry = PLANAR_GEOMETRY
         metadata.update(
             {
-                "grid_geometry": 2,
+                "grid_geometry": grid_geometry,
                 "periodic": int(getattr(spec, "periodic", False)),
                 "periodic_x": int(getattr(spec, "periodic_x", False)),
                 "crs_name": "Planar",
@@ -3073,7 +3120,9 @@ def _metadata(
     elif isinstance(spec, LimitedAreaGridSpec):
         metadata.update(
             {
-                "grid_geometry": 3,
+                "grid_geometry": SPHERE_GEOMETRY,
+                "open_boundary": 1,
+                "source_grid_geometry": SPHERE_GEOMETRY,
                 "grid_root": spec.parent.root,
                 "grid_level": spec.parent.bisections,
                 "parent_grid_name": spec.parent_grid_name,
@@ -3097,7 +3146,7 @@ def _metadata(
     elif isinstance(spec, CutGridSpec):
         metadata.update(
             {
-                "grid_geometry": 3,
+                "open_boundary": 1,
                 "cut_mode": spec.mode,
                 "selection_inclusion": spec.selection.inclusion,
                 "selection_cleanup": spec.selection.cleanup,
@@ -3140,6 +3189,12 @@ def _spec_uuid(
                 asdict(options.global_optimization)
             ),
         }
+        if spec.root > 2:
+            # R1 and R2 are geometrically unchanged: equal-arc interpolation
+            # coincides with their endpoints/midpoint. Preserve their UUIDs,
+            # but prevent pre-change R3+ grids from sharing a UUID with the
+            # corrected equal-arc geometry.
+            payload["root_subdivision"] = "great_circle"
         return str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,

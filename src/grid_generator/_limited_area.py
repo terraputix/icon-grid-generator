@@ -12,6 +12,7 @@ import uuid
 
 import numpy as np
 
+from ._grid_semantics import SPHERE_GEOMETRY, is_planar_geometry
 from ._types import (
     BisectionProvenance,
     GeometryData,
@@ -152,6 +153,9 @@ def _selected_cells_with_policy(
 ) -> np.ndarray:
     mask = np.zeros(parent.dims["cell"], dtype=bool)
     for region in regions:
+        if inclusion == "circumradius":
+            mask |= _circumradius_region_mask(parent, region)
+            continue
         mask |= _region_mask(parent.lon, parent.lat, region, parent.cell_center_xyz)
         if inclusion == "overlap":
             vertex_mask = _region_mask(
@@ -162,6 +166,92 @@ def _selected_cells_with_policy(
             )
             mask |= np.any(vertex_mask[parent.cells], axis=1)
     return np.flatnonzero(mask).astype(np.int32)
+
+
+def _circumradius_region_mask(parent: Any, region: Any) -> np.ndarray:
+    """Select cells through circumcenter/circumradius region intersection."""
+    name = region.__class__.__name__.removeprefix("_")
+    if name == "PolygonRegion":
+        center_mask = _region_mask(
+            parent.lon,
+            parent.lat,
+            region,
+            parent.cell_center_xyz,
+        )
+        vertex_mask = _region_mask(
+            parent.vertex_lon,
+            parent.vertex_lat,
+            region,
+            parent.vertices,
+        )
+        return center_mask | np.any(vertex_mask[parent.cells], axis=1)
+
+    centers = parent.cell_center_xyz
+    first_vertices = parent.vertices[parent.cells[:, 0]]
+    radius = np.degrees(
+        np.arccos(
+            np.clip(
+                np.sum(centers * first_vertices, axis=1),
+                -1.0,
+                1.0,
+            )
+        )
+    )
+
+    if name == "CircleRegion":
+        distance = _angular_distance_degrees(
+            parent.lon,
+            parent.lat,
+            region.lon,
+            region.lat,
+        )
+        return distance < radius + region.radius_degrees
+
+    if name == "OrientedRectangleRegion":
+        dx = _wrapped_lon_delta(parent.lon - region.center_lon) * cos(
+            radians(region.center_lat)
+        )
+        dy = parent.lat - region.center_lat
+        angle = radians(region.angle_degrees)
+        x_rot = dx * np.cos(angle) + dy * np.sin(angle)
+        y_rot = -dx * np.sin(angle) + dy * np.cos(angle)
+        return (
+            (np.abs(x_rot) <= 0.5 * region.width_degrees + radius)
+            & (np.abs(y_rot) <= 0.5 * region.height_degrees + radius)
+        )
+
+    if name == "LonLatBoxRegion":
+        longitude_span = float(np.mod(region.lon_max - region.lon_min, 360.0))
+        if np.isclose(longitude_span, 0.0) and region.lon_min != region.lon_max:
+            longitude_span = 360.0
+        half_width_lon = 0.5 * longitude_span
+        center_lon = float(_wrapped_lon_delta(region.lon_min + half_width_lon))
+        center_lat = 0.5 * (region.lat_min + region.lat_max)
+        half_width_lat = 0.5 * (region.lat_max - region.lat_min)
+        lon = parent.lon
+        lat = parent.lat
+    elif name == "RotatedLonLatBoxRegion":
+        from . import grid_generator as gg
+
+        rotated = gg._unrotate_latlon(
+            centers,
+            region.pole_lon,
+            region.pole_lat,
+        )
+        lon, lat = gg._lon_lat(rotated)
+        center_lon = region.center_lon
+        center_lat = region.center_lat
+        half_width_lon = region.half_width_lon
+        half_width_lat = region.half_width_lat
+    else:
+        raise TypeError(f"unsupported circumradius region {name}")
+
+    lon_delta = np.abs(_wrapped_lon_delta(lon - center_lon))
+    return (
+        (lon_delta <= half_width_lon + radius)
+        & (lat >= center_lat - half_width_lat - radius)
+        & (lat <= center_lat + half_width_lat + radius)
+    )
 
 
 def _region_mask(
@@ -823,7 +913,7 @@ def _optimize_local_geometry(
             "edge": topology.edges.shape[0],
             "vertex": geometry.vertices.shape[0],
         },
-        metadata={"grid_geometry": 3},
+        metadata={"grid_geometry": SPHERE_GEOMETRY, "open_boundary": 1},
         incident_edges_sorted=False,
     )
     vertices = _spring_relaxed_vertices(
@@ -993,10 +1083,7 @@ def _limited_metrics(
     closure: str,
     options: Any,
 ) -> MetricsData:
-    if (
-        parent.metadata.get("grid_geometry") == 2
-        or parent.metadata.get("source_grid_geometry") == 2
-    ):
+    if is_planar_geometry(parent.metadata):
         return _limited_planar_metrics(parent, geometry, topology, closure)
     return _spherical_open_metrics(geometry, topology, closure, options)
 
