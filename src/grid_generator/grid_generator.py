@@ -277,6 +277,16 @@ class ChannelGridSpec:
     def expected_vertices(self) -> int:
         return self.nx * (self.ny + 1)
 
+    @property
+    def domain_length(self) -> float:
+        """Periodic x extent in planar coordinate units."""
+        return self.nx * self.edge_length
+
+    @property
+    def domain_height(self) -> float:
+        """Open y extent in planar coordinate units."""
+        return self.ny * np.sqrt(3.0) * 0.5 * self.edge_length
+
 
 @dataclass(frozen=True)
 class ParallelogramGridSpec:
@@ -312,6 +322,16 @@ class ParallelogramGridSpec:
     @property
     def expected_vertices(self) -> int:
         return (self.nx + 1) * (self.ny + 1)
+
+    @property
+    def domain_length(self) -> float:
+        """Nominal unsheared x extent in planar coordinate units."""
+        return self.nx * self.edge_length
+
+    @property
+    def domain_height(self) -> float:
+        """Nominal y extent in planar coordinate units."""
+        return self.ny * np.sqrt(3.0) * 0.5 * self.edge_length
 
 
 @dataclass(frozen=True)
@@ -353,6 +373,16 @@ class RaggedOrthogonalGridSpec:
     @property
     def expected_vertices(self) -> int:
         return (self.nx + 1) * (self.ny + 1)
+
+    @property
+    def domain_length(self) -> float:
+        """Unperturbed x extent in planar coordinate units."""
+        return self.nx * self.dx
+
+    @property
+    def domain_height(self) -> float:
+        """Unperturbed y extent in planar coordinate units."""
+        return self.ny * self.dy
 
 
 @dataclass(frozen=True)
@@ -3135,7 +3165,7 @@ def _metadata(
             metadata["domain_height"] = spec.domain_height
             if getattr(spec, "periodic", False):
                 metadata["periodic_layout"] = spec.periodic_layout
-        elif hasattr(spec, "edge_length"):
+        if hasattr(spec, "edge_length"):
             metadata["planar_edge_length"] = spec.edge_length
         else:
             metadata["planar_dx"] = spec.dx

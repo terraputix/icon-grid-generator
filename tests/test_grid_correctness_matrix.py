@@ -36,6 +36,14 @@ class GridCase:
     spec_class: type | None = None
 
 
+@dataclass(frozen=True)
+class ScaleSeries:
+    id: str
+    factories: tuple[Callable[[], Any], ...]
+    geometry: str
+    boundary: str
+
+
 def _global(parent: str = "R02B01") -> Any:
     return generate_grid(parent, spring_iterations=5)
 
@@ -50,6 +58,26 @@ def _limited(region: Any) -> Any:
 def _cut(region_or_spec: Any) -> Any:
     parent = _global()
     return cut_grid(parent, region_or_spec)
+
+
+def _limited_at(parent: str) -> Any:
+    return generate_grid(
+        LimitedAreaGridSpec(
+            parent=parent,
+            region=Region.circle(lon=5.0, lat=15.0, radius_degrees=70.0),
+            boundary_depth=1,
+            local_optimization_iterations=0,
+        ),
+        optimize_global=False,
+        max_cells=None,
+    )
+
+
+def _cut_at(parent: str) -> Any:
+    return cut_grid(
+        generate_grid(parent, optimize_global=False, max_cells=None),
+        Region.circle(lon=5.0, lat=15.0, radius_degrees=70.0),
+    )
 
 
 GRID_CASES = [
@@ -95,9 +123,39 @@ GRID_CASES = [
         TorusGridSpec,
     ),
     GridCase(
+        "planar-torus-skew",
+        lambda: generate_grid(
+            TorusGridSpec(
+                nx=5,
+                ny=5,
+                edge_length=1_000.0,
+                periodic_layout="skew",
+            )
+        ),
+        "periodic_planar",
+        "closed",
+        TorusGridSpec,
+    ),
+    GridCase(
         "planar-stretched-torus",
         lambda: generate_grid(
             StretchedTorusGridSpec(nx=4, ny=4, edge_length=1_000.0, stretch_x=1.3)
+        ),
+        "periodic_planar",
+        "closed",
+        StretchedTorusGridSpec,
+    ),
+    GridCase(
+        "planar-stretched-torus-skew",
+        lambda: generate_grid(
+            StretchedTorusGridSpec(
+                nx=5,
+                ny=5,
+                edge_length=1_000.0,
+                stretch_x=1.3,
+                stretch_y=0.8,
+                periodic_layout="skew",
+            )
         ),
         "periodic_planar",
         "closed",
@@ -215,6 +273,159 @@ GRID_CASES = [
 ]
 
 
+SCALE_SERIES = [
+    ScaleSeries(
+        "global",
+        (
+            lambda: generate_grid("R01B00", optimize_global=False),
+            lambda: generate_grid("R01B02", optimize_global=False),
+            lambda: generate_grid("R02B03", optimize_global=False, max_cells=None),
+        ),
+        "global",
+        "closed",
+    ),
+    ScaleSeries(
+        "torus",
+        (
+            lambda: generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1_000.0)),
+            lambda: generate_grid(TorusGridSpec(nx=12, ny=8, edge_length=500.0)),
+            lambda: generate_grid(TorusGridSpec(nx=32, ny=24, edge_length=250.0)),
+        ),
+        "periodic_planar",
+        "closed",
+    ),
+    ScaleSeries(
+        "stretched-torus",
+        (
+            lambda: generate_grid(
+                StretchedTorusGridSpec(
+                    nx=4,
+                    ny=4,
+                    edge_length=1_000.0,
+                    stretch_x=1.2,
+                    stretch_y=0.8,
+                )
+            ),
+            lambda: generate_grid(
+                StretchedTorusGridSpec(
+                    nx=12,
+                    ny=8,
+                    edge_length=500.0,
+                    stretch_x=1.2,
+                    stretch_y=0.8,
+                )
+            ),
+            lambda: generate_grid(
+                StretchedTorusGridSpec(
+                    nx=32,
+                    ny=24,
+                    edge_length=250.0,
+                    stretch_x=1.2,
+                    stretch_y=0.8,
+                )
+            ),
+        ),
+        "periodic_planar",
+        "closed",
+    ),
+    ScaleSeries(
+        "channel",
+        (
+            lambda: generate_grid(ChannelGridSpec(nx=4, ny=2, edge_length=1_000.0)),
+            lambda: generate_grid(ChannelGridSpec(nx=12, ny=8, edge_length=500.0)),
+            lambda: generate_grid(ChannelGridSpec(nx=32, ny=24, edge_length=250.0)),
+        ),
+        "open_planar",
+        "open",
+    ),
+    ScaleSeries(
+        "parallelogram",
+        (
+            lambda: generate_grid(
+                ParallelogramGridSpec(
+                    nx=2,
+                    ny=2,
+                    edge_length=1_000.0,
+                    shear=-0.2,
+                )
+            ),
+            lambda: generate_grid(
+                ParallelogramGridSpec(
+                    nx=12,
+                    ny=8,
+                    edge_length=500.0,
+                    shear=0.25,
+                )
+            ),
+            lambda: generate_grid(
+                ParallelogramGridSpec(
+                    nx=32,
+                    ny=24,
+                    edge_length=250.0,
+                    shear=0.4,
+                )
+            ),
+        ),
+        "open_planar",
+        "open",
+    ),
+    ScaleSeries(
+        "ragged-orthogonal",
+        (
+            lambda: generate_grid(
+                RaggedOrthogonalGridSpec(
+                    nx=2,
+                    ny=2,
+                    dx=1_000.0,
+                    dy=800.0,
+                    raggedness=0.0,
+                )
+            ),
+            lambda: generate_grid(
+                RaggedOrthogonalGridSpec(
+                    nx=12,
+                    ny=8,
+                    dx=500.0,
+                    dy=400.0,
+                    raggedness=0.2,
+                )
+            ),
+            lambda: generate_grid(
+                RaggedOrthogonalGridSpec(
+                    nx=32,
+                    ny=24,
+                    dx=250.0,
+                    dy=200.0,
+                    raggedness=0.4,
+                )
+            ),
+        ),
+        "open_planar",
+        "open",
+    ),
+    ScaleSeries(
+        "limited-area",
+        (
+            lambda: _limited_at("R01B01"),
+            lambda: _limited_at("R01B02"),
+            lambda: _limited_at("R01B03"),
+        ),
+        "regional",
+        "open",
+    ),
+    ScaleSeries(
+        "cut",
+        (
+            lambda: _cut_at("R01B01"),
+            lambda: _cut_at("R01B02"),
+            lambda: _cut_at("R01B03"),
+        ),
+        "regional",
+        "open",
+    ),
+]
+
+
 @pytest.mark.parametrize("case", GRID_CASES, ids=[case.id for case in GRID_CASES])
 def test_all_generation_modes_satisfy_shared_mathematical_invariants(case):
     grid = case.factory()
@@ -245,6 +456,46 @@ def test_correctness_matrix_covers_all_supported_grid_spec_classes():
         StretchedTorusGridSpec,
         RaggedOrthogonalGridSpec,
     }
+
+
+@pytest.mark.parametrize("series", SCALE_SERIES, ids=lambda series: series.id)
+def test_increasing_size_series_match_in_memory_and_netcdf(series, tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    cell_counts = []
+
+    for index, factory in enumerate(series.factories):
+        grid = factory()
+        assert_valid_grid_math(
+            grid,
+            geometry=series.geometry,
+            boundary=series.boundary,
+        )
+        if all(
+            hasattr(grid.spec, name)
+            for name in ("expected_cells", "expected_edges", "expected_vertices")
+        ) and grid.spec.expected_cells > 0:
+            assert grid.dims == {
+                "cell": grid.spec.expected_cells,
+                "edge": grid.spec.expected_edges,
+                "vertex": grid.spec.expected_vertices,
+            }
+        if hasattr(grid.spec, "domain_length"):
+            assert grid.metadata["domain_length"] == pytest.approx(
+                grid.spec.domain_length
+            )
+            assert grid.metadata["domain_height"] == pytest.approx(
+                grid.spec.domain_height
+            )
+
+        path = grid.to_netcdf(tmp_path / f"{series.id}-{index}.nc")
+        with netcdf4.Dataset(path) as dataset:
+            assert_netcdf_grid_contract(dataset, grid)
+        cell_counts.append(grid.dims["cell"])
+
+    assert all(
+        smaller < larger
+        for smaller, larger in zip(cell_counts, cell_counts[1:])
+    )
 
 
 def test_planar_regular_modes_match_analytic_metrics():
@@ -318,22 +569,10 @@ def test_geometry_transforms_preserve_topology_and_return_valid_grids(factory, g
 
 @pytest.mark.parametrize(
     "case",
-    [
-        case
-        for case in GRID_CASES
-        if case.id
-        in {
-            "global-spec-optimized",
-            "global-string-raw",
-            "planar-torus",
-            "planar-channel",
-            "limited-box",
-            "cut-direct-circle",
-        }
-    ],
+    GRID_CASES,
     ids=lambda case: case.id,
 )
-def test_representative_generation_modes_export_valid_netcdf(case, tmp_path):
+def test_all_generation_modes_export_valid_netcdf(case, tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
     grid = case.factory()
     path = grid.to_netcdf(tmp_path / f"{case.id}.nc")

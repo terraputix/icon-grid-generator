@@ -194,6 +194,9 @@ the update, so callers remain responsible for checking scientific quality.
 - Planar `lon`/`lat` fields are normalized compatibility and visualization
   coordinates, not a geographic CRS. Scientific planar calculations should use
   Cartesian coordinates and metric arrays.
+- Planar NetCDF geometry attributes use the physical domain extents from the
+  specification. Channel `domain_length` is the x period; open parallelogram
+  and ragged values describe their nominal unperturbed extents.
 - Correct geometry metadata does not guarantee model-operator support. ICON
   2024.10's standard NWP least-squares and tangent-plane interpolation dispatch
   supports spherical and planar-torus geometry, but rejects planar-channel and
