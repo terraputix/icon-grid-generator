@@ -176,6 +176,13 @@ is expected. The package does not convert another planar unit to metres.
 a dimensionless extra x shift per row height; `raggedness` is a deterministic
 fraction of `dx`/`dy` used to perturb interior vertices.
 
+Every planar specification exposes `domain_length` and `domain_height`. These
+are the periodic extents for tori, the x period and open height for channels,
+and the nominal unperturbed extents for open parallelogram and ragged grids.
+NetCDF export writes these physical values into the geometry attributes
+consumed by ICON; it does not substitute spherical-Earth dimensions for planar
+domains.
+
 Both torus specs record `periodic_layout` in metadata and grid UUID identity.
 Use the rectangular default for consumers that apply a separate minimum image
 to each Cartesian axis. The skew layout is an explicit alternative for coupled

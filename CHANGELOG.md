@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Write physical `domain_length` and `domain_height` geometry attributes for
+  channel, parallelogram, and ragged planar grids instead of spherical fallback
+  dimensions.
 - Make rectangular, independently wrapped x/y periods the default for regular
   and stretched planar tori. The default requires an even `ny`; explicitly use
   `periodic_layout="skew"` for the coupled legacy lattice and odd row counts.

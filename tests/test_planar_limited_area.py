@@ -329,6 +329,23 @@ def test_planar_grid_variants_have_consistent_triangular_topology(
         assert grid.metadata["periodic"] == 0
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ChannelGridSpec(nx=7, ny=5, edge_length=2.5),
+        ParallelogramGridSpec(nx=7, ny=5, edge_length=2.5, shear=-0.4),
+        RaggedOrthogonalGridSpec(nx=7, ny=5, dx=2.5, dy=1.75, raggedness=0.3),
+    ],
+)
+def test_open_planar_specs_publish_physical_domain_extents(spec):
+    grid = generate_grid(spec)
+
+    assert grid.metadata["domain_length"] == pytest.approx(spec.domain_length)
+    assert grid.metadata["domain_height"] == pytest.approx(spec.domain_height)
+    assert grid.metadata["domain_length"] < 100.0
+    assert grid.metadata["domain_height"] < 100.0
+
+
 def test_stretched_torus_rejects_degenerate_periodic_dimensions():
     with pytest.raises(ValueError, match="greater than or equal to 3"):
         StretchedTorusGridSpec(nx=2, ny=4, edge_length=1.0)

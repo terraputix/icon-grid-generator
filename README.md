@@ -53,6 +53,8 @@ ICON 2024.10's standard NWP interpolation path supports spherical grids and
 planar tori, but not its channel or general-plane enum values; those additional
 planar families remain useful for diagnostics and consumers with matching
 operators rather than as standard ICON-NWP simulation grids.
+Planar files write `domain_length` and `domain_height` from the physical spec
+extents; they never inherit spherical-Earth dimensions.
 
 Planar tori use rectangular, independently wrapped x/y periods by default and
 therefore require an even number of rows. The former coupled skew lattice

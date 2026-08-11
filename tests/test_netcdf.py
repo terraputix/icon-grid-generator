@@ -561,6 +561,12 @@ def test_planar_netcdf_uses_icon_geometry_enum(
 
     with netcdf4.Dataset(path) as dataset:
         assert dataset.getncattr("grid_geometry") == expected_geometry
+        assert dataset.getncattr("domain_length") == pytest.approx(
+            spec.domain_length
+        )
+        assert dataset.getncattr("domain_height") == pytest.approx(
+            spec.domain_height
+        )
         assert "open_boundary" not in dataset.ncattrs()
         assert np.allclose(
             dataset.variables["cartesian_x_vertices"][:],

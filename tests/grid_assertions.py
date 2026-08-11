@@ -87,6 +87,52 @@ def assert_netcdf_grid_contract(dataset: Any, grid: Any) -> None:
         values = dataset.variables[name][:]
         assert np.min(values) >= 1
 
+    assert dataset.getncattr("uuidOfHGrid") == grid.metadata["uuidOfHGrid"]
+    assert dataset.getncattr("grid_geometry") == grid.metadata["grid_geometry"]
+    assert dataset.getncattr("sphere_radius") == grid.metadata["sphere_radius"]
+    assert dataset.getncattr("domain_length") == grid.metadata.get(
+        "domain_length",
+        2.0 * math.pi * grid.options.sphere_radius,
+    )
+    assert dataset.getncattr("domain_height") == grid.metadata.get(
+        "domain_height",
+        2.0 * math.pi * grid.options.sphere_radius,
+    )
+    assert np.array_equal(dataset.getncattr("domain_cartesian_center"), np.zeros(3))
+    if grid.metadata.get("open_boundary") == 1:
+        assert dataset.getncattr("open_boundary") == 1
+    else:
+        assert "open_boundary" not in dataset.ncattrs()
+
+    open_grid = grid.metadata.get("open_boundary") == 1
+    expected_adjacent = (
+        np.where(grid.edge_cells < 0, -1, grid.edge_cells + 1)
+        if open_grid
+        else grid.edge_cells + 1
+    )
+    expected_neighbors = (
+        np.where(
+            grid.icon_connectivity["c2c"] < 0,
+            -1,
+            grid.icon_connectivity["c2c"] + 1,
+        )
+        if open_grid
+        else grid.icon_connectivity["c2c"] + 1
+    )
+    assert np.array_equal(dataset.variables["vertex_of_cell"][:], grid.cells.T + 1)
+    assert np.array_equal(dataset.variables["edge_of_cell"][:], grid.cell_edges.T + 1)
+    assert np.array_equal(dataset.variables["edge_vertices"][:], grid.edges.T + 1)
+    assert np.array_equal(
+        dataset.variables["adjacent_cell_of_edge"][:],
+        expected_adjacent.T,
+    )
+    assert np.array_equal(
+        dataset.variables["neighbor_cell_index"][:],
+        expected_neighbors.T,
+    )
+    for name in ("cell_area", "dual_area", "edge_length", "dual_edge_length"):
+        assert np.allclose(dataset.variables[name][:], grid.geometry[name])
+
 
 def _assert_core_shapes(grid: Any) -> None:
     assert grid.vertices.shape == (grid.dims["vertex"], 3)
