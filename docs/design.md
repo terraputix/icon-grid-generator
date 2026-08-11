@@ -224,23 +224,47 @@ Checkpoint and NetCDF columns are logical sizes at completion.
 
 ### Full output
 
-| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R02B08` | 9.86 km | 5,242,880 | 54.8 s | 21.6 s | 76.4 s | 1.94 GiB | 0.77 GiB | 4.09 GiB |
-| `R02B09` | 4.93 km | 20,971,520 | 72.3 s | 46.9 s | 1.99 min | 6.48 GiB | 3.20 GiB | 16.37 GiB |
-| `R02B10` | 2.47 km | 83,886,080 | 3.45 min | 3.69 min | 7.14 min | 24.00 GiB | 12.92 GiB | 65.47 GiB |
-| `R02B11` | 1.23 km | 335,544,320 | 11.78 min | 17.49 min | 29.27 min | 93.78 GiB | 51.83 GiB | 261.88 GiB |
-| `R02B12` | 0.616 km | 1,342,177,280 | 43.51 min | 91.24 min | 134.74 min | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
+#### Runtime
+
+| Grid | Resolution | Cells | Generation | NetCDF export | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 54.8 s | 21.6 s | 76.4 s |
+| `R02B09` | 4.93 km | 20,971,520 | 72.3 s | 46.9 s | 1.99 min |
+| `R02B10` | 2.47 km | 83,886,080 | 3.45 min | 3.69 min | 7.14 min |
+| `R02B11` | 1.23 km | 335,544,320 | 11.78 min | 17.49 min | 29.27 min |
+| `R02B12` | 0.616 km | 1,342,177,280 | 43.51 min | 91.24 min | 134.74 min |
+
+#### Memory and storage
+
+| Grid | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: |
+| `R02B08` | 1.94 GiB | 0.77 GiB | 4.09 GiB |
+| `R02B09` | 6.48 GiB | 3.20 GiB | 16.37 GiB |
+| `R02B10` | 24.00 GiB | 12.92 GiB | 65.47 GiB |
+| `R02B11` | 93.78 GiB | 51.83 GiB | 261.88 GiB |
+| `R02B12` | 328.18 GiB | 162.46 GiB | 1,047.50 GiB |
 
 ### Reduced output
 
-| Grid | Resolution | Cells | Generation | NetCDF export | Total | Peak RSS | Checkpoint storage | NetCDF storage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s | 2.10 GiB | 0.77 GiB | 1.89 GiB |
-| `R02B09` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min | 6.65 GiB | 3.20 GiB | 7.58 GiB |
-| `R02B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min | 24.44 GiB | 12.92 GiB | 30.31 GiB |
-| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min | 93.78 GiB | 51.83 GiB | 121.25 GiB |
-| `R02B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min | 328.18 GiB | 162.46 GiB | 485.00 GiB |
+#### Runtime
+
+| Grid | Resolution | Cells | Generation | NetCDF export | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `R02B08` | 9.86 km | 5,242,880 | 37.3 s | 10.8 s | 48.1 s |
+| `R02B09` | 4.93 km | 20,971,520 | 72.8 s | 26.4 s | 1.65 min |
+| `R02B10` | 2.47 km | 83,886,080 | 3.83 min | 1.57 min | 5.40 min |
+| `R02B11` | 1.23 km | 335,544,320 | 12.92 min | 7.54 min | 20.46 min |
+| `R02B12` | 0.616 km | 1,342,177,280 | 42.03 min | 42.05 min | 84.08 min |
+
+#### Memory and storage
+
+| Grid | Peak RSS | Checkpoint storage | NetCDF storage |
+| --- | ---: | ---: | ---: |
+| `R02B08` | 2.10 GiB | 0.77 GiB | 1.89 GiB |
+| `R02B09` | 6.65 GiB | 3.20 GiB | 7.58 GiB |
+| `R02B10` | 24.44 GiB | 12.92 GiB | 30.31 GiB |
+| `R02B11` | 93.78 GiB | 51.83 GiB | 121.25 GiB |
+| `R02B12` | 328.18 GiB | 162.46 GiB | 485.00 GiB |
 
 The field profile does not change core topology generation, so differences in
 that column are run-to-run variability. Reduced output omits unselected
