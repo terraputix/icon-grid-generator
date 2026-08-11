@@ -474,9 +474,24 @@ def test_planar_cut_netcdf_retains_physical_edgequad_area(tmp_path):
         ),
     )
 
+    assert grid.metadata["domain_length"] == pytest.approx(
+        parent.spec.domain_length
+    )
+    assert grid.metadata["domain_height"] == pytest.approx(
+        parent.spec.domain_height
+    )
+    assert grid.metadata["periodic_layout"] == parent.spec.periodic_layout
+
     path = grid.to_netcdf(tmp_path / "planar-cut.nc")
 
     with netcdf4.Dataset(path) as dataset:
+        assert dataset.getncattr("domain_length") == pytest.approx(
+            parent.spec.domain_length
+        )
+        assert dataset.getncattr("domain_height") == pytest.approx(
+            parent.spec.domain_height
+        )
+        assert dataset.getncattr("periodic_layout") == parent.spec.periodic_layout
         assert np.allclose(
             dataset.variables["edgequad_area"][:],
             grid.geometry["edgequad_area"],
