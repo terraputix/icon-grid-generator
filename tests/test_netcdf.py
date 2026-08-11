@@ -246,7 +246,7 @@ def test_custom_streamed_mesh_fields_skip_cell_and_edge_center_construction(
 def test_streamed_generation_rejects_non_global_grid(tmp_path):
     with pytest.raises(TypeError, match="global grids only"):
         generate_grid_to_netcdf(
-            TorusGridSpec(nx=3, ny=3, edge_length=1.0),
+            TorusGridSpec(nx=3, ny=4, edge_length=1.0),
             tmp_path / "torus.nc",
         )
 
@@ -422,16 +422,17 @@ def test_high_resolution_streaming_fails_early_without_accelerator(
 
 def test_torus_netcdf_export_contains_complete_periodic_grid(tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=2.0))
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=2.0))
     path = grid.to_netcdf(tmp_path / "torus.nc")
 
     with netcdf4.Dataset(path) as dataset:
-        assert dataset.dimensions["cell"].size == 24
-        assert dataset.dimensions["vertex"].size == 12
-        assert dataset.dimensions["edge"].size == 36
+        assert dataset.dimensions["cell"].size == 32
+        assert dataset.dimensions["vertex"].size == 16
+        assert dataset.dimensions["edge"].size == 48
         assert dataset.getncattr("grid_geometry") == 2
+        assert dataset.getncattr("periodic_layout") == "rectangular"
         assert dataset.getncattr("torus_nx") == 4
-        assert dataset.getncattr("torus_ny") == 3
+        assert dataset.getncattr("torus_ny") == 4
         assert np.array_equal(
             dataset.variables["adjacent_cell_of_edge"][:], grid.edge_cells.T + 1
         )
@@ -443,10 +444,26 @@ def test_torus_netcdf_export_contains_complete_periodic_grid(tmp_path):
         )
         assert dataset.variables["edgequad_area"].getncattr("units") == "m2"
 
+        vertices = np.column_stack(
+            (
+                dataset.variables["cartesian_x_vertices"][:],
+                dataset.variables["cartesian_y_vertices"][:],
+            )
+        )
+        edges = dataset.variables["edge_vertices"][:].T - 1
+        vectors = vertices[edges[:, 1]] - vertices[edges[:, 0]]
+        vectors[:, 0] -= dataset.getncattr("domain_length") * np.rint(
+            vectors[:, 0] / dataset.getncattr("domain_length")
+        )
+        vectors[:, 1] -= dataset.getncattr("domain_height") * np.rint(
+            vectors[:, 1] / dataset.getncattr("domain_height")
+        )
+        assert np.allclose(np.linalg.norm(vectors, axis=1), 2.0)
+
 
 def test_planar_cut_netcdf_retains_physical_edgequad_area(tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
-    parent = generate_grid(TorusGridSpec(nx=6, ny=5, edge_length=2.0))
+    parent = generate_grid(TorusGridSpec(nx=6, ny=6, edge_length=2.0))
     grid = cut_grid(
         parent,
         Region.lonlat_box(
@@ -529,7 +546,7 @@ def test_limited_area_icon_profile_selects_spherical_reconstruction(tmp_path):
 @pytest.mark.parametrize(
     ("spec", "expected_geometry"),
     [
-        (StretchedTorusGridSpec(nx=4, ny=3, edge_length=2.0), 2),
+        (StretchedTorusGridSpec(nx=4, ny=4, edge_length=2.0), 2),
         (ChannelGridSpec(nx=3, ny=2, edge_length=2.0), 3),
         (ParallelogramGridSpec(nx=3, ny=2, edge_length=2.0), 4),
         (RaggedOrthogonalGridSpec(nx=3, ny=2, dx=2.0, dy=1.5), 4),

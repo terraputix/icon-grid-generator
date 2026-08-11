@@ -10,7 +10,7 @@ from ._types import GeometryData, MetricsData, RefinementData, TopologyData
 
 
 class PlanarTorusGeometry:
-    """Build a torus through the shared skew-periodic planar pipeline."""
+    """Build a torus through the shared periodic planar pipeline."""
 
     def build(self, spec: Any, options: Any) -> GeometryData:
         from ._planar import PlanarTriangularGeometry

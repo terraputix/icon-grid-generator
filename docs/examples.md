@@ -105,7 +105,8 @@ write_svg(raw_grid, output / "global_r1b1_raw.svg")
 
 ## Planar Torus
 
-`TorusGridSpec` creates a doubly periodic planar triangular grid.
+`TorusGridSpec` creates a doubly periodic planar triangular grid. Its default
+rectangular layout wraps x and y independently and requires an even `ny`.
 
 ```python
 from pathlib import Path
@@ -165,7 +166,7 @@ output = Path("grid_examples")
 output.mkdir(exist_ok=True)
 
 stretched = generate_grid(
-    StretchedTorusGridSpec(nx=8, ny=5, edge_length=1_000.0, stretch_x=1.4)
+    StretchedTorusGridSpec(nx=8, ny=6, edge_length=1_000.0, stretch_x=1.4)
 )
 ragged = generate_grid(RaggedOrthogonalGridSpec(nx=8, ny=5, dx=1_000.0, dy=800.0))
 write_svg(stretched, output / "planar_stretched_torus.svg")

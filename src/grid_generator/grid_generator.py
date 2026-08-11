@@ -151,6 +151,7 @@ class TorusGridSpec:
     ny: int
     edge_length: float
     name: str = ""
+    periodic_layout: str = "rectangular"
 
     periodic: bool = field(default=True, init=False, repr=False)
 
@@ -159,9 +160,11 @@ class TorusGridSpec:
             raise ValueError("torus nx must be an integer greater than or equal to 3")
         if not isinstance(self.ny, int) or isinstance(self.ny, bool) or self.ny < 3:
             raise ValueError("torus ny must be an integer greater than or equal to 3")
+        periodic_layout = _validate_periodic_layout(self.periodic_layout, self.ny)
         edge_length = _finite_float_option("edge_length", self.edge_length)
         if edge_length <= 0.0:
             raise ValueError("edge_length must be positive")
+        object.__setattr__(self, "periodic_layout", periodic_layout)
         if not self.name:
             object.__setattr__(self, "name", f"TORUS{self.nx}x{self.ny}")
 
@@ -196,6 +199,7 @@ class StretchedTorusGridSpec:
     stretch_x: float = 1.0
     stretch_y: float = 1.0
     name: str = ""
+    periodic_layout: str = "rectangular"
 
     periodic: bool = field(default=True, init=False, repr=False)
 
@@ -204,6 +208,7 @@ class StretchedTorusGridSpec:
         edge_length = _finite_float_option("edge_length", self.edge_length)
         stretch_x = _finite_float_option("stretch_x", self.stretch_x)
         stretch_y = _finite_float_option("stretch_y", self.stretch_y)
+        periodic_layout = _validate_periodic_layout(self.periodic_layout, self.ny)
         if edge_length <= 0.0:
             raise ValueError("edge_length must be positive")
         if stretch_x <= 0.0 or stretch_y <= 0.0:
@@ -211,6 +216,7 @@ class StretchedTorusGridSpec:
         object.__setattr__(self, "edge_length", edge_length)
         object.__setattr__(self, "stretch_x", stretch_x)
         object.__setattr__(self, "stretch_y", stretch_y)
+        object.__setattr__(self, "periodic_layout", periodic_layout)
         if not self.name:
             object.__setattr__(self, "name", f"STRETCHED_TORUS{self.nx}x{self.ny}")
 
@@ -1080,6 +1086,20 @@ def _validate_planar_counts(name: str, nx: Any, ny: Any, *, minimum: int = 1) ->
         raise ValueError(
             f"{name} ny must be an integer greater than or equal to {minimum}"
         )
+
+
+def _validate_periodic_layout(value: Any, ny: int) -> str:
+    if not isinstance(value, str):
+        raise TypeError("periodic_layout must be a string")
+    if value not in {"rectangular", "skew"}:
+        raise ValueError("periodic_layout must be 'rectangular' or 'skew'")
+    if value == "rectangular" and ny % 2 != 0:
+        raise ValueError(
+            "rectangular periodic_layout requires an even ny so the row offset "
+            "is a whole number of columns; use periodic_layout='skew' to retain "
+            "the coupled lattice for odd ny"
+        )
+    return value
 
 
 def parse_grid_spec(
@@ -3088,6 +3108,7 @@ def _metadata(
                 "torus_nx": spec.nx,
                 "torus_ny": spec.ny,
                 "torus_edge_length": spec.edge_length,
+                "periodic_layout": spec.periodic_layout,
             }
         )
     elif isinstance(spec, _PLANAR_GRID_SPEC_TYPES):
@@ -3112,6 +3133,8 @@ def _metadata(
         if hasattr(spec, "domain_length"):
             metadata["domain_length"] = spec.domain_length
             metadata["domain_height"] = spec.domain_height
+            if getattr(spec, "periodic", False):
+                metadata["periodic_layout"] = spec.periodic_layout
         elif hasattr(spec, "edge_length"):
             metadata["planar_edge_length"] = spec.edge_length
         else:
@@ -3213,6 +3236,7 @@ def _spec_uuid(
                 "nx": spec.nx,
                 "ny": spec.ny,
                 "edge_length": _canonical_float(spec.edge_length),
+                "periodic_layout": spec.periodic_layout,
             }
         )
     elif isinstance(spec, LimitedAreaGridSpec):

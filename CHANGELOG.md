@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make rectangular, independently wrapped x/y periods the default for regular
+  and stretched planar tori. The default requires an even `ny`; explicitly use
+  `periodic_layout="skew"` for the coupled legacy lattice and odd row counts.
+  The layout is recorded in metadata and grid identity.
 - Use equal-arc great-circle subdivision for every `R<n>B0` root, applying the
   same spherical construction to roots above two as well as R1/R2.
   R3+ UUID payloads identify the corrected construction; unchanged R1/R2 UUIDs

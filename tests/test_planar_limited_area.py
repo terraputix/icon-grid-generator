@@ -27,13 +27,14 @@ from grid_generator.transforms import (
 
 def test_torus_grid_has_periodic_topology_and_planar_metrics():
     edge_length = 1000.0
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=edge_length))
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=edge_length))
 
-    assert grid.name == "TORUS4x3"
-    assert grid.dims == {"cell": 24, "vertex": 12, "edge": 36}
+    assert grid.name == "TORUS4x4"
+    assert grid.dims == {"cell": 32, "vertex": 16, "edge": 48}
     assert grid.metadata["grid_geometry"] == 2
+    assert grid.metadata["periodic_layout"] == "rectangular"
     assert grid.metadata["domain_length"] == pytest.approx(4000.0)
-    assert grid.metadata["domain_height"] == pytest.approx(3.0 * np.sqrt(3.0) * 500.0)
+    assert grid.metadata["domain_height"] == pytest.approx(4.0 * np.sqrt(3.0) * 500.0)
     assert np.all(grid.edge_cells >= 0)
     assert np.all(grid.edge_cells[:, 0] != grid.edge_cells[:, 1])
     assert np.allclose(grid.geometry["edge_length"], edge_length)
@@ -86,12 +87,14 @@ def test_torus_coordinates_metrics_normals_and_transforms_share_periodic_geometr
 
 def _torus_minimum_image_vectors(vectors, spec):
     result = np.empty_like(vectors, dtype=np.float64)
-    y_shift = (
-        0.5
-        * spec.ny
-        * spec.edge_length
-        * getattr(spec, "stretch_x", 1.0)
-    )
+    y_shift = 0.0
+    if spec.periodic_layout == "skew":
+        y_shift = (
+            0.5
+            * spec.ny
+            * spec.edge_length
+            * getattr(spec, "stretch_x", 1.0)
+        )
     for index, vector in enumerate(vectors):
         best = None
         best_norm = np.inf
@@ -107,6 +110,90 @@ def _torus_minimum_image_vectors(vectors, spec):
                 best_norm = norm
         result[index] = best
     return result
+
+
+def _independent_minimum_image_vectors(vectors, spec):
+    result = np.asarray(vectors, dtype=np.float64).copy()
+    result[..., 0] -= np.rint(result[..., 0] / spec.domain_length) * spec.domain_length
+    result[..., 1] -= np.rint(result[..., 1] / spec.domain_height) * spec.domain_height
+    return result
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        TorusGridSpec(nx=10, ny=4, edge_length=100.0),
+        TorusGridSpec(nx=7, ny=12, edge_length=100.0),
+        StretchedTorusGridSpec(
+            nx=10,
+            ny=6,
+            edge_length=100.0,
+            stretch_x=1.3,
+            stretch_y=0.7,
+        ),
+    ],
+)
+def test_default_torus_layout_matches_independent_axis_periodicity(spec):
+    grid = generate_grid(spec)
+
+    assert spec.periodic_layout == "rectangular"
+    assert np.all((0.0 <= grid.vertices[:, 0]) & (grid.vertices[:, 0] < spec.domain_length))
+    assert np.all((0.0 <= grid.vertices[:, 1]) & (grid.vertices[:, 1] < spec.domain_height))
+
+    edge_vectors = _independent_minimum_image_vectors(
+        grid.vertices[grid.edges[:, 1]] - grid.vertices[grid.edges[:, 0]],
+        spec,
+    )
+    assert np.allclose(
+        np.linalg.norm(edge_vectors, axis=1),
+        grid.geometry["edge_length"],
+    )
+
+    adjacent = grid.edge_cells
+    dual_vectors = _independent_minimum_image_vectors(
+        grid.cell_center_xyz[adjacent[:, 1]] - grid.cell_center_xyz[adjacent[:, 0]],
+        spec,
+    )
+    assert np.allclose(
+        np.linalg.norm(dual_vectors, axis=1),
+        grid.geometry["dual_edge_length"],
+    )
+
+    base = grid.vertices[grid.cells[:, 0]]
+    first = _independent_minimum_image_vectors(
+        grid.vertices[grid.cells[:, 1]] - base,
+        spec,
+    )
+    second = _independent_minimum_image_vectors(
+        grid.vertices[grid.cells[:, 2]] - base,
+        spec,
+    )
+    area = 0.5 * np.abs(first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0])
+    assert np.allclose(area, grid.geometry["cell_area"])
+
+
+@pytest.mark.parametrize("spec_type", [TorusGridSpec, StretchedTorusGridSpec])
+def test_torus_periodic_layout_is_explicit_validated_and_part_of_identity(spec_type):
+    with pytest.raises(ValueError, match="even ny"):
+        spec_type(nx=4, ny=3, edge_length=1.0)
+    with pytest.raises(ValueError, match="'rectangular' or 'skew'"):
+        spec_type(nx=4, ny=4, edge_length=1.0, periodic_layout="unknown")
+    with pytest.raises(TypeError, match="must be a string"):
+        spec_type(nx=4, ny=4, edge_length=1.0, periodic_layout=True)
+
+    rectangular = generate_grid(spec_type(nx=4, ny=4, edge_length=1.0))
+    skew = generate_grid(
+        spec_type(nx=4, ny=4, edge_length=1.0, periodic_layout="skew")
+    )
+    odd_skew = generate_grid(
+        spec_type(nx=4, ny=3, edge_length=1.0, periodic_layout="skew")
+    )
+
+    assert rectangular.metadata["periodic_layout"] == "rectangular"
+    assert skew.metadata["periodic_layout"] == "skew"
+    assert odd_skew.metadata["periodic_layout"] == "skew"
+    assert rectangular.metadata["uuidOfHGrid"] != skew.metadata["uuidOfHGrid"]
+    assert not np.array_equal(rectangular.cells, skew.cells)
 
 
 def _geometric_dual_edge_lengths(grid):
@@ -141,14 +228,14 @@ def _geometric_dual_edge_lengths(grid):
     [
         StretchedTorusGridSpec(
             nx=6,
-            ny=5,
+            ny=6,
             edge_length=2.0,
             stretch_x=1.5,
             stretch_y=0.75,
         ),
         StretchedTorusGridSpec(
             nx=6,
-            ny=5,
+            ny=6,
             edge_length=2.0,
             stretch_x=1.5,
             stretch_y=1.0,
@@ -206,7 +293,7 @@ def test_open_planar_dual_areas_partition_primal_area(spec):
         (
             StretchedTorusGridSpec(
                 nx=4,
-                ny=3,
+                ny=4,
                 edge_length=2.0,
                 stretch_x=1.5,
                 stretch_y=0.75,
@@ -244,7 +331,7 @@ def test_planar_grid_variants_have_consistent_triangular_topology(
 
 def test_stretched_torus_rejects_degenerate_periodic_dimensions():
     with pytest.raises(ValueError, match="greater than or equal to 3"):
-        StretchedTorusGridSpec(nx=2, ny=3, edge_length=1.0)
+        StretchedTorusGridSpec(nx=2, ny=4, edge_length=1.0)
     with pytest.raises(ValueError, match="greater than or equal to 3"):
         StretchedTorusGridSpec(nx=3, ny=2, edge_length=1.0)
 

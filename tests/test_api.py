@@ -148,8 +148,8 @@ def test_parse_grid_spec_negative_bisection_defensive_guard(monkeypatch):
 
 def test_generate_grid_accepts_all_public_grid_specs():
     global_grid = generate_grid(parse_grid_spec("R01B00"))
-    torus_grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1.0))
-    stretched_grid = generate_grid(StretchedTorusGridSpec(nx=4, ny=3, edge_length=1.0))
+    torus_grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1.0))
+    stretched_grid = generate_grid(StretchedTorusGridSpec(nx=4, ny=4, edge_length=1.0))
     channel_grid = generate_grid(ChannelGridSpec(nx=3, ny=2, edge_length=1.0))
     parallelogram_grid = generate_grid(ParallelogramGridSpec(nx=3, ny=2, edge_length=1.0))
     ragged_grid = generate_grid(RaggedOrthogonalGridSpec(nx=3, ny=2, dx=1.0, dy=1.0))
@@ -313,7 +313,7 @@ def test_generate_grid_accepts_keyword_option_overrides():
 )
 def test_planar_specs_reject_explicit_global_optimization(call_kwargs):
     with pytest.raises(ValueError, match="only supported for global grids"):
-        generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1.0), **call_kwargs)
+        generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1.0), **call_kwargs)
 
 
 @pytest.mark.parametrize(
@@ -326,7 +326,7 @@ def test_planar_specs_reject_explicit_global_optimization(call_kwargs):
     ],
 )
 def test_planar_specs_accept_absent_or_disabled_global_optimization(call_kwargs):
-    grid = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1.0), **call_kwargs)
+    grid = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1.0), **call_kwargs)
 
     assert grid.metadata["grid_geometry"] == 2
     assert grid.options.optimize_global is False

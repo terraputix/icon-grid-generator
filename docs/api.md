@@ -128,7 +128,10 @@ work rather than materializing the complete schema first.
   selects at the preceding global bisection level and refines the compact
   region once by default. `construction="cut_final"` selects directly from the
   requested final-resolution parent.
-- `TorusGridSpec` describes planar doubly periodic triangular torus grids.
+- `TorusGridSpec` describes planar doubly periodic triangular torus grids. Its
+  default `periodic_layout="rectangular"` wraps x and y independently and
+  requires an even `ny`; `periodic_layout="skew"` retains a coupled lattice
+  and permits odd row counts.
 - `ChannelGridSpec` describes a planar triangular channel with open boundaries
   in one direction and periodic boundaries in the other.
 - `ParallelogramGridSpec` describes a skewed planar triangular parallelogram.
@@ -144,9 +147,11 @@ from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSp
 | Object | Parameters |
 | --- | --- |
 | `GlobalGridSpec` | `root`, `bisections`, optional `name` |
-| `TorusGridSpec` | `nx`, `ny`, `edge_length`, optional `name` |
+| `TorusGridSpec` | `nx`, `ny`, `edge_length`, optional `name`, `periodic_layout` |
 | `ChannelGridSpec` | `nx`, `ny`, `edge_length`, optional `name` |
 | `ParallelogramGridSpec` | `nx`, `ny`, `edge_length`, optional `shear`, `name` |
+| `StretchedTorusGridSpec` | `nx`, `ny`, `edge_length`, optional `stretch_x`, `stretch_y`, `name`, `periodic_layout` |
+| `RaggedOrthogonalGridSpec` | `nx`, `ny`, `dx`, `dy`, optional `raggedness`, `name` |
 | `LimitedAreaGridSpec` | `parent`, `region`, optional `boundary_depth`, `construction`, `selection`, `boundary`, `local_optimization_iterations`, `name` |
 
 Use `generate_grid("R2B4")` for the common global-grid case. Use explicit spec
@@ -157,10 +162,10 @@ Planar counts and boundary conditions differ by family:
 
 | Spec | Minimum size | Boundary condition |
 | --- | --- | --- |
-| `TorusGridSpec` | `nx >= 3`, `ny >= 3` | Periodic in both coupled lattice directions |
+| `TorusGridSpec` | `nx >= 3`, `ny >= 3`; default layout requires even `ny` | Independently periodic x/y by default; optional coupled skew layout |
 | `ChannelGridSpec` | `nx >= 3`, `ny >= 2` | Periodic in x, open in y |
 | `ParallelogramGridSpec` | `nx >= 1`, `ny >= 1` | Open |
-| `StretchedTorusGridSpec` | `nx >= 3`, `ny >= 3` | Periodic in both directions; positive x/y stretch |
+| `StretchedTorusGridSpec` | `nx >= 3`, `ny >= 3`; default layout requires even `ny` | Independently periodic x/y by default; positive x/y stretch; optional coupled skew layout |
 | `RaggedOrthogonalGridSpec` | `nx >= 1`, `ny >= 1` | Open; `0 <= raggedness < 0.45` |
 
 The regular planar families interpret `nx` and `ny` as numbers of rectangular
@@ -170,6 +175,11 @@ is expected. The package does not convert another planar unit to metres.
 `stretch_x` and `stretch_y` multiply the regular torus coordinates; `shear` is
 a dimensionless extra x shift per row height; `raggedness` is a deterministic
 fraction of `dx`/`dy` used to perturb interior vertices.
+
+Both torus specs record `periodic_layout` in metadata and grid UUID identity.
+Use the rectangular default for consumers that apply a separate minimum image
+to each Cartesian axis. The skew layout is an explicit alternative for coupled
+lattice algorithms or odd `ny`.
 
 ## Regions
 
@@ -500,6 +510,13 @@ The separate flag matters to ICON: geometry value `3` means planar channel and
 would disable spherical behavior if used for a regional spherical grid. The
 package uses `open_boundary=1` to enable strict regional ordering, metric, and
 missing-neighbor checks while preserving the correct coordinate geometry.
+
+The enum values describe files accurately, but they do not imply that every
+ICON component implements every geometry. In ICON 2024.10 the standard NWP
+least-squares and tangent-plane interpolation dispatch accepts spherical (`1`)
+and planar-torus (`2`) geometry and rejects channel (`3`) and general planar
+(`4`) geometry. Treat the latter families as diagnostic or consumer-specific
+meshes unless the selected model path explicitly supports them.
 
 ## Grid Object
 

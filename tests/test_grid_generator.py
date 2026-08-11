@@ -2129,7 +2129,7 @@ def test_private_optimization_helpers_cover_boundary_and_projection_branches():
     with pytest.raises(ValueError, match="global"):
         optimize_global_grid(grid, {"method": "spring", "iterations": 1})
 
-    torus = generate_grid(TorusGridSpec(nx=4, ny=3, edge_length=1.0))
+    torus = generate_grid(TorusGridSpec(nx=4, ny=4, edge_length=1.0))
     optimized_torus = optimize_grid(
         torus,
         OptimizationOptions(iterations=1, fixed_boundary=False, target_edge_length=1.0),
