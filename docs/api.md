@@ -2,7 +2,8 @@
 
 ## Everyday API
 
-Most users import only `generate_grid`:
+Choose the entry point by the result you need. Use `generate_grid()` when you
+want an in-memory object for analysis or reuse:
 
 ```python
 from grid_generator import generate_grid
@@ -10,6 +11,22 @@ from grid_generator import generate_grid
 grid = generate_grid("R2B4")
 grid.to_netcdf("icon_grid_R02B04.nc")
 ```
+
+Use `generate_grid_to_netcdf()` when the file itself is the result:
+
+```python
+from grid_generator import TorusGridSpec, generate_grid_to_netcdf
+
+generate_grid_to_netcdf(
+    TorusGridSpec(nx=12, ny=6, edge_length=1_000.0),
+    "torus.nc",
+)
+```
+
+Both entry points accept every public grid spec and the same grid options.
+`IconGrid.to_netcdf()` is a conversion method for an object already in memory;
+`generate_grid_to_netcdf()` owns generation and chooses the appropriate writing
+strategy.
 
 The root package exports the primary grid specifications and generators:
 
@@ -29,7 +46,8 @@ from grid_generator import (
 ```
 
 For global grids whose complete in-memory `IconGrid` would exceed available
-memory, use the export-first `generate_grid_to_netcdf` path:
+memory, the file-oriented path automatically uses compact export-first
+generation:
 
 ```py
 from grid_generator import generate_grid_to_netcdf
@@ -37,20 +55,26 @@ from grid_generator import generate_grid_to_netcdf
 generate_grid_to_netcdf(
     "R2B8",
     "icon_grid_R02B08.nc",
-    options={"max_cells": None, "accelerator": "numba"},
+    max_cells=None,
+    accelerator="numba",
     chunk_size=1_000_000,
     work_dir="icon-grid-R2B08-work",
     fields="reduced",
 )
 ```
 
-This global-only path keeps compact staged topology, checkpoints completed
-bisection levels, and writes export-only fields in bounded chunks. New output is
-published atomically only after the NetCDF file closes successfully; an existing
-output remains in place until then. High-resolution streaming requires the
-`accelerate` extra. The
-optional-dependency-free NumPy fallback remains available through
-`generate_grid` for grids that fit in memory.
+For large global grids this path keeps compact staged topology, checkpoints
+completed bisection levels, and writes export-only fields in bounded chunks. New
+output is published atomically only after the NetCDF file closes successfully;
+an existing output remains in place until then. High-resolution streaming
+requires the `accelerate` extra. The optional-dependency-free NumPy fallback
+remains available through `generate_grid` for grids that fit in memory.
+
+Planar and limited-area specs are accepted by the same file-oriented function,
+but currently use their in-memory generation pipeline before writing.
+`chunk_size`, `work_dir`, and `resume` apply only when compact global generation
+is selected. Grid options may be supplied through `options`, or directly as
+keywords as above; direct keywords take precedence.
 
 If `work_dir` is omitted, checkpoints are stored in a hidden directory beside
 the requested output file. For large grids, put the output or an explicit
@@ -81,9 +105,9 @@ in-memory workflow with sufficient memory.
 
 ### NetCDF field profiles
 
-Both `grid.to_netcdf(..., fields=...)` and
-`generate_grid_to_netcdf(..., fields=...)` accept the same selector. The
-default is the complete schema.
+Both `grid.to_netcdf(..., fields=...)` and the file-oriented
+`generate_grid_to_netcdf(..., fields=...)` accept the same selector. The default
+is the complete schema.
 
 | Profile | Fields | Consumer scope | Approximate R2B12 payload |
 | --- | ---: | --- | ---: |
@@ -562,7 +586,8 @@ immutable values, or copy an array explicitly before modifying it.
 `to_netcdf(path, fields="full")` creates missing parent directories and returns
 the resulting `Path`. Its optional `sphere_radius` argument must match the
 radius used during generation; regenerate with the desired `sphere_radius`
-rather than relabeling already computed metrics during export.
+rather than relabeling already computed metrics during export. If no in-memory
+object is needed, call `generate_grid_to_netcdf(spec, path, ...)` directly.
 
 Grid identity is deterministic: equal canonical specs and options produce the
 same UUID. A limited-area grid, cut, or geometry transform also incorporates its

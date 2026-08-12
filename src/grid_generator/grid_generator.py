@@ -18,7 +18,6 @@ import uuid
 
 import numpy as np
 
-from ._io import IconNetcdfWriter
 from ._grid_semantics import (
     PLANAR_CHANNEL_GEOMETRY,
     PLANAR_GEOMETRY,
@@ -961,8 +960,10 @@ class IconGrid:
         sphere_radius: float | None = None,
         fields: str | Iterable[str] = "full",
     ) -> Any:
-        """Write selected ICON-style NetCDF fields, defaulting to the full schema."""
-        return IconNetcdfWriter().write(
+        """Write this in-memory grid using the selected ICON NetCDF fields."""
+        from ._netcdf import write_icon_grid
+
+        return write_icon_grid(
             self,
             path,
             sphere_radius=sphere_radius,
@@ -1001,9 +1002,6 @@ def generate_grid(
     should be shared across multiple calls. Global spherical grids are optimized
     by default; pass ``optimize_global=False`` only for raw topology diagnostics.
     """
-    grid_spec = parse_grid_spec(spec) if isinstance(spec, str) else spec
-    if not isinstance(grid_spec, _SUPPORTED_GRID_SPEC_TYPES):
-        raise TypeError("spec must be an ICON R<n>B<k> string or a supported grid spec")
     option_overrides = _option_overrides_from_kwargs(
         max_cells=max_cells,
         accelerator=accelerator,
@@ -1021,41 +1019,16 @@ def generate_grid(
         subcentre=subcentre,
         number_of_grid_used=number_of_grid_used,
     )
-    resolved_options = _resolve_options(options, option_overrides)
-    explicit_optimize_global = _optimize_global_was_explicit(options, option_overrides)
-    if (
-        isinstance(grid_spec, (TorusGridSpec, *_PLANAR_GRID_SPEC_TYPES))
-        and resolved_options.global_optimization.method == "spring"
-        and not explicit_optimize_global
-    ):
-        resolved_options = IconGridOptions(
-            max_cells=resolved_options.max_cells,
-            accelerator=resolved_options.accelerator,
-            radius=resolved_options.radius,
-            sphere_radius=resolved_options.sphere_radius,
-            optimize_global=False,
-            spring_beta=resolved_options.spring_beta,
-            spring_iterations=resolved_options.spring_iterations,
-            fixed_boundary=resolved_options.fixed_boundary,
-            north_pole_lon=resolved_options.north_pole_lon,
-            north_pole_lat=resolved_options.north_pole_lat,
-            rotation_angle_degrees=resolved_options.rotation_angle_degrees,
-            indexing=resolved_options.indexing,
-            centre=resolved_options.centre,
-            subcentre=resolved_options.subcentre,
-            number_of_grid_used=resolved_options.number_of_grid_used,
-        )
-    _validate_options(grid_spec, resolved_options)
-
-    if isinstance(grid_spec, (TorusGridSpec, *_PLANAR_GRID_SPEC_TYPES)):
-        return _generate_planar_grid(grid_spec, resolved_options)
-    if isinstance(grid_spec, LimitedAreaGridSpec):
-        return _generate_limited_area_grid(grid_spec, resolved_options)
-    return _generate_grid(grid_spec, resolved_options, _GlobalGenerationContext())
+    grid_spec, resolved_options = _prepare_grid_generation(
+        spec,
+        options,
+        option_overrides,
+    )
+    return _generate_resolved_grid(grid_spec, resolved_options)
 
 
 def generate_grid_to_netcdf(
-    spec: str | GlobalGridSpec,
+    spec: str | GlobalGridSpec | TorusGridSpec | LimitedAreaGridSpec | Any,
     path: str | Path,
     options: IconGridOptions | Mapping[str, Any] | None = None,
     *,
@@ -1063,27 +1036,37 @@ def generate_grid_to_netcdf(
     work_dir: str | Path | None = None,
     resume: bool = True,
     fields: str | Iterable[str] = "full",
+    **grid_options: Any,
 ) -> Path:
-    """Generate and stream a global ICON grid directly to NetCDF.
+    """Generate any supported grid directly to an ICON-style NetCDF file.
 
-    Unlike :func:`generate_grid`, this export-first path does not retain all
-    derived geometry, connectivity, and serialization fields simultaneously.
-    It is intended for global grids that exceed the practical memory limit of
-    the in-memory :class:`IconGrid` representation. ``fields`` accepts the
-    profiles ``"full"``, ``"reduced"``, ``"icon"``, and ``"icon4py"`` or an
-    explicit iterable of established field names.
+    This is the file-oriented counterpart of :func:`generate_grid`. Large global
+    grids automatically use compact staged generation, resumable checkpoints,
+    and bounded NetCDF serialization. Other grids use the same validated
+    in-memory pipeline as :func:`generate_grid` and are then written normally.
+
+    ``fields`` accepts the profiles ``"full"``, ``"reduced"``, ``"icon"``, and
+    ``"icon4py"`` or an exact iterable of established field names. Grid options
+    may be supplied through ``options`` or as direct keyword overrides, with
+    direct overrides taking precedence. ``chunk_size``, ``work_dir``, and
+    ``resume`` affect only checkpointed global generation.
     """
-    grid_spec = parse_grid_spec(spec) if isinstance(spec, str) else spec
-    if not isinstance(grid_spec, GlobalGridSpec):
-        raise TypeError(
-            "streamed NetCDF generation currently supports global grids only"
-        )
-    resolved_options = _resolve_options(options, {})
-    _validate_options(grid_spec, resolved_options)
     from ._netcdf import resolve_icon_netcdf_fields
-    from ._streaming import generate_global_grid_to_netcdf
 
     selected_fields = resolve_icon_netcdf_fields(fields)
+    grid_spec, resolved_options = _prepare_grid_generation(
+        spec,
+        options,
+        grid_options,
+    )
+
+    if not isinstance(grid_spec, GlobalGridSpec):
+        return _generate_resolved_grid(grid_spec, resolved_options).to_netcdf(
+            path,
+            fields=selected_fields,
+        )
+
+    from ._streaming import generate_global_grid_to_netcdf
 
     return generate_global_grid_to_netcdf(
         grid_spec,
@@ -1093,6 +1076,79 @@ def generate_grid_to_netcdf(
         work_dir=work_dir,
         resume=resume,
         selected_fields=selected_fields,
+    )
+
+
+def _prepare_grid_generation(
+    spec: str | GlobalGridSpec | TorusGridSpec | LimitedAreaGridSpec | Any,
+    options: IconGridOptions | Mapping[str, Any] | None,
+    option_overrides: Mapping[str, Any],
+) -> tuple[Any, IconGridOptions]:
+    """Normalize and validate one request for either public generation path."""
+    grid_spec = parse_grid_spec(spec) if isinstance(spec, str) else spec
+    if not isinstance(grid_spec, _SUPPORTED_GRID_SPEC_TYPES):
+        raise TypeError(
+            "spec must be an ICON R<n>B<k> string or a supported grid spec"
+        )
+
+    resolved_options = _resolve_options(options, option_overrides)
+    explicit_optimize_global = _optimize_global_was_explicit(options, option_overrides)
+    if (
+        isinstance(grid_spec, (TorusGridSpec, *_PLANAR_GRID_SPEC_TYPES))
+        and resolved_options.global_optimization.method == "spring"
+        and not explicit_optimize_global
+    ):
+        resolved_options = replace(resolved_options, optimize_global=False)
+    _validate_options(grid_spec, resolved_options)
+    return grid_spec, resolved_options
+
+
+def _generate_resolved_grid(spec: Any, options: IconGridOptions) -> IconGrid:
+    """Dispatch a normalized request without repeating public validation."""
+    if isinstance(spec, (TorusGridSpec, *_PLANAR_GRID_SPEC_TYPES)):
+        return _generate_planar_grid(spec, options)
+    if isinstance(spec, LimitedAreaGridSpec):
+        return _generate_limited_area_grid(spec, options)
+    return _generate_grid(spec, options, _GlobalGenerationContext())
+
+
+def _assemble_icon_grid(
+    spec: Any,
+    options: IconGridOptions,
+    geometry: Any,
+    topology: Any,
+    geometry_fields: dict[str, np.ndarray],
+    refinement_fields: dict[str, np.ndarray],
+    metadata: dict[str, Any],
+    *,
+    geometry_spec: Any | None = None,
+) -> IconGrid:
+    """Assemble the shared public grid model from pipeline stage results."""
+    return IconGrid(
+        spec=spec,
+        options=options,
+        vertices=geometry.vertices,
+        cells=geometry.cells,
+        lon=geometry.lon,
+        lat=geometry.lat,
+        vertex_lon=geometry.vertex_lon,
+        vertex_lat=geometry.vertex_lat,
+        cell_center_xyz=geometry.cell_center_xyz,
+        cell_vertex_lon=geometry.cell_vertex_lon,
+        cell_vertex_lat=geometry.cell_vertex_lat,
+        edges=topology.edges,
+        cell_edges=topology.cell_edges,
+        edge_cells=topology.edge_cells,
+        edge_center_xyz=topology.edge_center_xyz,
+        edge_lon=topology.edge_lon,
+        edge_lat=topology.edge_lat,
+        icon_connectivity=topology.icon_connectivity,
+        connectivity=topology.connectivity,
+        neighbor_tables=topology.neighbor_tables,
+        geometry=geometry_fields,
+        refinement=refinement_fields,
+        metadata=metadata,
+        geometry_spec=geometry_spec,
     )
 
 
@@ -1217,30 +1273,14 @@ def _generate_planar_grid(spec: Any, options: IconGridOptions) -> IconGrid:
     metrics = PlanarTriangularMetricsBuilder().build(spec, geometry, topology)
     refinement = PlanarRefinementBuilder().build(geometry, topology)
     metadata = _metadata(spec, options, metrics.fields)
-    return IconGrid(
-        spec=spec,
-        options=options,
-        vertices=geometry.vertices,
-        cells=geometry.cells,
-        lon=geometry.lon,
-        lat=geometry.lat,
-        vertex_lon=geometry.vertex_lon,
-        vertex_lat=geometry.vertex_lat,
-        cell_center_xyz=geometry.cell_center_xyz,
-        cell_vertex_lon=geometry.cell_vertex_lon,
-        cell_vertex_lat=geometry.cell_vertex_lat,
-        edges=topology.edges,
-        cell_edges=topology.cell_edges,
-        edge_cells=topology.edge_cells,
-        edge_center_xyz=topology.edge_center_xyz,
-        edge_lon=topology.edge_lon,
-        edge_lat=topology.edge_lat,
-        icon_connectivity=topology.icon_connectivity,
-        connectivity=topology.connectivity,
-        neighbor_tables=topology.neighbor_tables,
-        geometry=metrics.fields,
-        refinement=refinement.fields,
-        metadata=metadata,
+    return _assemble_icon_grid(
+        spec,
+        options,
+        geometry,
+        topology,
+        metrics.fields,
+        refinement.fields,
+        metadata,
     )
 
 
@@ -1263,30 +1303,14 @@ def _generate_limited_area_grid(
     )
     metadata["construction_parent_grid_name"] = parent.name
     metadata["construction_parent_uuid"] = parent.metadata["uuidOfHGrid"]
-    return IconGrid(
-        spec=spec,
-        options=options,
-        vertices=geometry.vertices,
-        cells=geometry.cells,
-        lon=geometry.lon,
-        lat=geometry.lat,
-        vertex_lon=geometry.vertex_lon,
-        vertex_lat=geometry.vertex_lat,
-        cell_center_xyz=geometry.cell_center_xyz,
-        cell_vertex_lon=geometry.cell_vertex_lon,
-        cell_vertex_lat=geometry.cell_vertex_lat,
-        edges=topology.edges,
-        cell_edges=topology.cell_edges,
-        edge_cells=topology.edge_cells,
-        edge_center_xyz=topology.edge_center_xyz,
-        edge_lon=topology.edge_lon,
-        edge_lat=topology.edge_lat,
-        icon_connectivity=topology.icon_connectivity,
-        connectivity=topology.connectivity,
-        neighbor_tables=topology.neighbor_tables,
-        geometry=metrics.fields,
-        refinement=refinement.fields,
-        metadata=metadata,
+    return _assemble_icon_grid(
+        spec,
+        options,
+        geometry,
+        topology,
+        metrics.fields,
+        refinement.fields,
+        metadata,
     )
 
 
@@ -1385,30 +1409,14 @@ def cut_grid(
             "cut_mode": spec.mode,
         }
     )
-    return IconGrid(
-        spec=spec,
-        options=grid.options,
-        vertices=geometry.vertices,
-        cells=geometry.cells,
-        lon=geometry.lon,
-        lat=geometry.lat,
-        vertex_lon=geometry.vertex_lon,
-        vertex_lat=geometry.vertex_lat,
-        cell_center_xyz=geometry.cell_center_xyz,
-        cell_vertex_lon=geometry.cell_vertex_lon,
-        cell_vertex_lat=geometry.cell_vertex_lat,
-        edges=topology.edges,
-        cell_edges=topology.cell_edges,
-        edge_cells=topology.edge_cells,
-        edge_center_xyz=topology.edge_center_xyz,
-        edge_lon=topology.edge_lon,
-        edge_lat=topology.edge_lat,
-        icon_connectivity=topology.icon_connectivity,
-        connectivity=topology.connectivity,
-        neighbor_tables=topology.neighbor_tables,
-        geometry=metrics.fields,
-        refinement=refinement.fields,
-        metadata=metadata,
+    return _assemble_icon_grid(
+        spec,
+        grid.options,
+        geometry,
+        topology,
+        metrics.fields,
+        refinement.fields,
+        metadata,
         geometry_spec=geometry_spec,
     )
 

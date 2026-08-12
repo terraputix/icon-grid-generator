@@ -81,30 +81,14 @@ def rebuild_planar_grid(grid: Any, vertices: np.ndarray) -> Any:
     metrics = _planar_metrics(geometry_spec, geometry, topology)
     metadata = dict(grid.metadata)
     metadata.update(gg._geometry_summary(metrics.fields))
-    return gg.IconGrid(
-        spec=grid.spec,
-        options=grid.options,
-        vertices=geometry.vertices,
-        cells=geometry.cells,
-        lon=geometry.lon,
-        lat=geometry.lat,
-        vertex_lon=geometry.vertex_lon,
-        vertex_lat=geometry.vertex_lat,
-        cell_center_xyz=geometry.cell_center_xyz,
-        cell_vertex_lon=geometry.cell_vertex_lon,
-        cell_vertex_lat=geometry.cell_vertex_lat,
-        edges=topology.edges,
-        cell_edges=topology.cell_edges,
-        edge_cells=topology.edge_cells,
-        edge_center_xyz=topology.edge_center_xyz,
-        edge_lon=topology.edge_lon,
-        edge_lat=topology.edge_lat,
-        icon_connectivity=topology.icon_connectivity,
-        connectivity=topology.connectivity,
-        neighbor_tables=topology.neighbor_tables,
-        geometry=metrics.fields,
-        refinement={name: value.copy() for name, value in grid.refinement.items()},
-        metadata=metadata,
+    return gg._assemble_icon_grid(
+        grid.spec,
+        grid.options,
+        geometry,
+        topology,
+        metrics.fields,
+        {name: value.copy() for name, value in grid.refinement.items()},
+        metadata,
         geometry_spec=grid.geometry_spec,
     )
 

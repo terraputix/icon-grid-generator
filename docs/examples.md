@@ -62,9 +62,10 @@ grid.to_netcdf(output / "icon_grid_R01B01.nc")
 
 ### Export-first reduced profile
 
-For a global grid that is too large to retain as a complete `IconGrid`, generate
-directly to NetCDF. This example uses the 46-field `reduced` profile and keeps
-resumable checkpoints on disk-backed storage:
+Use `generate_grid_to_netcdf()` whenever only a file is needed. It accepts every
+public grid spec; for a global grid too large to retain as a complete `IconGrid`,
+it automatically selects the checkpointed implementation. This example uses the
+46-field `reduced` profile and keeps resumable checkpoints on disk-backed storage:
 
 ```py
 from grid_generator import generate_grid_to_netcdf
@@ -72,15 +73,18 @@ from grid_generator import generate_grid_to_netcdf
 generate_grid_to_netcdf(
     "R2B8",
     "icon_grid_R02B08.nc",
-    options={"max_cells": None, "accelerator": "numba"},
+    max_cells=None,
+    accelerator="numba",
     work_dir="icon-grid-R02B08-work",
     fields="reduced",
 )
 ```
 
-The export-first API is global-only and requires the `accelerate` and `netcdf`
-extras at high resolution. See [Performance and Scaling](design.md#performance-and-scaling)
-before selecting a finer grid.
+The checkpointed implementation is global-only and requires the `accelerate`
+and `netcdf` extras at high resolution. Planar and limited-area specs use their
+in-memory pipeline before writing. See
+[Performance and Scaling](design.md#performance-and-scaling) before selecting a
+finer grid.
 
 ## Raw Diagnostic Grid
 

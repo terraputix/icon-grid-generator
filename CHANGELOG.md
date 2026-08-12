@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-08-12
+
+- Make `generate_grid_to_netcdf()` the consistent file-oriented entry point for
+  every public grid spec, with the same direct option overrides as
+  `generate_grid()` and automatic compact streaming for large global grids.
+- Centralize request preparation, `IconGrid` pipeline assembly, and NetCDF
+  variable schema ownership while removing the redundant stateless writer
+  wrapper.
 - Make circumradius-based regional selection independent of the Cartesian
   display radius, preserving topology and UUID identity across display scales.
 - Preserve planar domain extents and periodic layout when exporting cut grids.

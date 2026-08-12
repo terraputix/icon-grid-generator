@@ -17,6 +17,7 @@ from grid_generator import (
     Region,
     TorusGridSpec,
     generate_grid,
+    generate_grid_to_netcdf,
 )
 from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSpec
 
@@ -282,7 +283,11 @@ def test_release_metadata_matches_latest_changelog_entry():
 def test_all_public_grid_specs_export_to_netcdf(spec, tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
     grid = generate_grid(spec, options={"max_cells": None})
-    path = grid.to_netcdf(tmp_path / f"{grid.name}.nc")
+    path = generate_grid_to_netcdf(
+        spec,
+        tmp_path / f"{grid.name}.nc",
+        max_cells=None,
+    )
 
     with netcdf4.Dataset(path) as dataset:
         assert dataset.dimensions["cell"].size == grid.dims["cell"]

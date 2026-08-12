@@ -413,6 +413,152 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
 }
 
 
+def _icon_variable_definitions() -> list[
+    tuple[str, tuple[str, ...], np.dtype[Any], dict[str, Any]]
+]:
+    """Return the canonical ordered schema shared by both NetCDF writers."""
+    float64 = np.dtype(np.float64)
+    int32 = np.dtype(np.int32)
+    definitions: list[tuple[str, tuple[str, ...], np.dtype[Any], dict[str, Any]]] = []
+
+    def add(
+        name: str,
+        dims: tuple[str, ...],
+        dtype: np.dtype[Any],
+        attrs: dict[str, Any] | None = None,
+    ) -> None:
+        definitions.append((name, dims, dtype, attrs or {}))
+
+    radians = {"units": "radian"}
+    for name, dims in (
+        ("clon", ("cell",)),
+        ("clat", ("cell",)),
+        ("clon_vertices", ("cell", "nv")),
+        ("clat_vertices", ("cell", "nv")),
+        ("vlon", ("vertex",)),
+        ("vlat", ("vertex",)),
+        ("elon", ("edge",)),
+        ("elat", ("edge",)),
+        ("elon_vertices", ("edge", "no")),
+        ("elat_vertices", ("edge", "no")),
+        ("lon_cell_centre", ("cell",)),
+        ("lat_cell_centre", ("cell",)),
+        ("longitude_vertices", ("vertex",)),
+        ("latitude_vertices", ("vertex",)),
+        ("lon_edge_centre", ("edge",)),
+        ("lat_edge_centre", ("edge",)),
+    ):
+        add(name, dims, float64, radians)
+
+    for name, dims in (
+        ("edge_of_cell", ("nv", "cell")),
+        ("vertex_of_cell", ("nv", "cell")),
+        ("neighbor_cell_index", ("nv", "cell")),
+        ("adjacent_cell_of_edge", ("nc", "edge")),
+        ("edge_vertices", ("nc", "edge")),
+        ("cells_of_vertex", ("ne", "vertex")),
+        ("edges_of_vertex", ("ne", "vertex")),
+        ("vertices_of_vertex", ("ne", "vertex")),
+    ):
+        add(name, dims, int32)
+
+    add("cell_area", ("cell",), float64, {"units": "m2"})
+    add("dual_area", ("vertex",), float64, {"units": "m2"})
+    add("cell_area_p", ("cell",), float64, {"units": "m2"})
+    add("dual_area_p", ("vertex",), float64, {"units": "m2"})
+    add("edge_length", ("edge",), float64, {"units": "m"})
+    add("dual_edge_length", ("edge",), float64, {"units": "m"})
+    add("edge_cell_distance", ("nc", "edge"), float64, {"units": "m"})
+    add("edge_vert_distance", ("nc", "edge"), float64, {"units": "m"})
+    add(
+        "edgequad_area",
+        ("edge",),
+        float64,
+        {
+            "units": "1",
+            "normalization": "physical edge quadrilateral area divided by sphere_radius squared",
+        },
+    )
+    add("orientation_of_normal", ("nv", "cell"), int32)
+    add("edge_system_orientation", ("edge",), int32)
+    add("edge_orientation", ("ne", "vertex"), int32)
+
+    for name, dims in (
+        ("refin_c_ctrl", ("cell",)),
+        ("refin_e_ctrl", ("edge",)),
+        ("refin_v_ctrl", ("vertex",)),
+        ("start_idx_c", ("max_chdom", "cell_grf")),
+        ("end_idx_c", ("max_chdom", "cell_grf")),
+        ("start_idx_e", ("max_chdom", "edge_grf")),
+        ("end_idx_e", ("max_chdom", "edge_grf")),
+        ("start_idx_v", ("max_chdom", "vert_grf")),
+        ("end_idx_v", ("max_chdom", "vert_grf")),
+    ):
+        add(name, dims, int32)
+
+    add("cell_elevation", ("cell",), float64, {"units": "m"})
+    add("edge_elevation", ("edge",), float64, {"units": "m"})
+    add("cell_sea_land_mask", ("cell",), int32)
+    add("edge_sea_land_mask", ("edge",), int32)
+
+    meters = {"units": "meters"}
+    for name, dims, dtype, attrs in (
+        ("cartesian_x_vertices", ("vertex",), float64, meters),
+        ("cartesian_y_vertices", ("vertex",), float64, meters),
+        ("cartesian_z_vertices", ("vertex",), float64, meters),
+        ("cell_circumcenter_cartesian_x", ("cell",), float64, meters),
+        ("cell_circumcenter_cartesian_y", ("cell",), float64, meters),
+        ("cell_circumcenter_cartesian_z", ("cell",), float64, meters),
+        ("edge_middle_cartesian_x", ("edge",), float64, meters),
+        ("edge_middle_cartesian_y", ("edge",), float64, meters),
+        ("edge_middle_cartesian_z", ("edge",), float64, meters),
+        ("phys_cell_id", ("cell",), int32, {}),
+        ("phys_edge_id", ("edge",), int32, {}),
+        ("cell_index", ("cell",), int32, {}),
+        ("edge_index", ("edge",), int32, {}),
+        ("vertex_index", ("vertex",), int32, {}),
+        ("edge_dual_middle_cartesian_x", ("edge",), float64, meters),
+        ("edge_dual_middle_cartesian_y", ("edge",), float64, meters),
+        ("edge_dual_middle_cartesian_z", ("edge",), float64, meters),
+    ):
+        add(name, dims, dtype, attrs)
+
+    for name in (
+        "edge_primal_normal_cartesian_x",
+        "edge_primal_normal_cartesian_y",
+        "edge_primal_normal_cartesian_z",
+        "edge_dual_normal_cartesian_x",
+        "edge_dual_normal_cartesian_y",
+        "edge_dual_normal_cartesian_z",
+    ):
+        add(name, ("edge",), float64, meters)
+    for name in (
+        "zonal_normal_primal_edge",
+        "meridional_normal_primal_edge",
+        "zonal_normal_dual_edge",
+        "meridional_normal_dual_edge",
+    ):
+        add(name, ("edge",), float64, radians)
+
+    for name, dims in (
+        ("parent_cell_index", ("cell",)),
+        ("parent_cell_type", ("cell",)),
+        ("edge_parent_type", ("edge",)),
+        ("parent_edge_index", ("edge",)),
+        ("parent_vertex_index", ("vertex",)),
+        ("child_cell_index", ("no", "cell")),
+        ("child_cell_id", ("cell",)),
+        ("child_edge_index", ("no", "edge")),
+        ("child_edge_id", ("edge",)),
+    ):
+        add(name, dims, int32)
+
+    add("quadrilateral_area", ("edge",), float64)
+    add("vlon_vertices", ("vertex", "ne"), float64, radians)
+    add("vlat_vertices", ("vertex", "ne"), float64, radians)
+
+    return definitions
+
 
 def write_icon_grid(
     grid: Any,

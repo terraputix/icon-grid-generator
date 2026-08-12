@@ -40,6 +40,19 @@ def test_netcdf_field_profiles_have_audited_contract_sizes():
     assert profiles["reduced"] == profiles["icon"] | profiles["icon4py"]
 
 
+def test_netcdf_schema_definition_matches_in_memory_field_assembly():
+    definitions = _netcdf._icon_variable_definitions()
+    assert tuple(name for name, *_ in definitions) == _netcdf.ICON_NETCDF_FIELD_NAMES
+
+    schema = {name: (dims, dtype, attrs) for name, dims, dtype, attrs in definitions}
+    fields = _netcdf._icon_fields(generate_grid("R01B01"))
+    for name, dims, data, attrs in fields:
+        expected_dims, expected_dtype, expected_attrs = schema[name]
+        assert dims == expected_dims
+        assert np.asarray(data).dtype == expected_dtype
+        assert expected_attrs.items() <= attrs.items()
+
+
 @pytest.mark.parametrize("profile", ["full", "reduced", "icon", "icon4py"])
 def test_in_memory_netcdf_field_profile_writes_exact_contract(profile, tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
@@ -243,11 +256,26 @@ def test_custom_streamed_mesh_fields_skip_cell_and_edge_center_construction(
         }.isdisjoint(dataset.ncattrs())
 
 
-def test_streamed_generation_rejects_non_global_grid(tmp_path):
-    with pytest.raises(TypeError, match="global grids only"):
+def test_file_oriented_generation_accepts_direct_grid_option_overrides(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    output = generate_grid_to_netcdf(
+        TorusGridSpec(nx=3, ny=4, edge_length=1.0),
+        tmp_path / "torus.nc",
+        options={"sphere_radius": 2.0},
+        sphere_radius=3.0,
+        fields=["clon", "vertex_of_cell"],
+    )
+
+    with netcdf4.Dataset(output) as dataset:
+        assert dataset.getncattr("grid_geometry") == 2
+        assert dataset.getncattr("sphere_radius") == 3.0
+        assert list(dataset.variables) == ["clon", "vertex_of_cell"]
+
+    with pytest.raises(TypeError, match="unknown grid option"):
         generate_grid_to_netcdf(
             TorusGridSpec(nx=3, ny=4, edge_length=1.0),
-            tmp_path / "torus.nc",
+            tmp_path / "invalid.nc",
+            not_an_option=True,
         )
 
 

@@ -213,12 +213,13 @@ The default avoids constructing the four-times-larger final-resolution global
 grid. Compaction, incidence construction, bisection, and metric calculation use
 typed arrays and the existing accelerated kernels where available.
 
-The in-memory `generate_grid()` path still holds the coarse global parent until
-the compact regional arrays have been built. A fully checkpointed,
-export-first limited-area implementation analogous to global
-`generate_grid_to_netcdf()` remains future work. Until that exists, CH-scale
-runs should use `max_cells=None`, the `accelerate` extra, explicit disk-backed
-scratch for surrounding workflows, and sufficient node memory.
+Limited-area specs can be passed to either `generate_grid()` or the file-oriented
+`generate_grid_to_netcdf()` API, but both currently hold the coarse global parent
+until the compact regional arrays have been built. A fully checkpointed
+limited-area implementation analogous to the global export-first engine remains
+future work. Until that exists, CH-scale runs should use `max_cells=None`, the
+`accelerate` extra, explicit disk-backed scratch for surrounding workflows, and
+sufficient node memory.
 
 Standalone non-periodic planar specs also remain on their existing mirrored
 metric and zero-control conventions. Applying the shared policy/indexing layer

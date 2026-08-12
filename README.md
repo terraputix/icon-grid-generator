@@ -12,8 +12,9 @@ Pure Python generation of deterministic ICON-style triangular grids.
 
 The package provides spherical `R<n>B<k>` grids, planar triangular grids,
 limited-area extraction, geometry diagnostics and transforms, xarray conversion,
-and ICON-compatible NetCDF export. Large global grids use export-first generation
-with bounded derived-field memory and resumable disk checkpoints.
+and ICON-compatible NetCDF export. The same file-oriented API handles every grid
+family; large global grids automatically use bounded derived-field memory and
+resumable disk checkpoints.
 
 ## Installation
 
@@ -69,7 +70,19 @@ skew_torus = generate_grid(
 )
 ```
 
-Generate a large global grid directly to NetCDF:
+Generate any grid directly to NetCDF when the in-memory object is not needed:
+
+```python
+from grid_generator import TorusGridSpec, generate_grid_to_netcdf
+
+generate_grid_to_netcdf(
+    TorusGridSpec(nx=12, ny=6, edge_length=1_000.0),
+    "torus.nc",
+)
+```
+
+The same call automatically selects the export-first implementation for a large
+global grid:
 
 ```py
 from grid_generator import generate_grid_to_netcdf
@@ -77,15 +90,17 @@ from grid_generator import generate_grid_to_netcdf
 generate_grid_to_netcdf(
     "R2B8",
     "icon_grid_R02B08.nc",
-    options={"max_cells": None, "accelerator": "numba"},
+    max_cells=None,
+    accelerator="numba",
     work_dir="icon-grid-R2B08-work",
     fields="reduced",
 )
 ```
 
-This export-first path supports global grids only. `R2B8` is a practical first
-large-grid example at about 9.86 km resolution; check the resource tables before
-requesting finer grids.
+Checkpointed, bounded-memory generation is currently specific to global grids;
+other grid families use their normal in-memory generator before writing. `R2B8`
+is a practical first large-grid example at about 9.86 km resolution; check the
+resource tables before requesting finer grids.
 
 The default `full` profile contains 88 fields, including the established
 `quadrilateral_area`, `vlon_vertices`, and `vlat_vertices` fields.

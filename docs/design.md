@@ -25,7 +25,7 @@ construct NetCDF-only fields in bounded groups. This path returns the output
 
 ## Compatibility Contracts
 
-- Public grid specs, `generate_grid()`, and global-only
+- Public grid specs, `generate_grid()`, and the file-oriented
   `generate_grid_to_netcdf()` are the main generation API.
 - `IconGrid.dims` and array shapes derive deterministically from the spec.
 - Internal topology arrays are zero-based; exported NetCDF index fields are
@@ -98,9 +98,11 @@ construct NetCDF-only fields in bounded groups. This path returns the output
   options. Limited-area and cut-grid payloads include the source parent UUID,
   and `uuidOfParHGrid` records that source. Any payload change is a
   compatibility change.
-- NetCDF export is an internal module boundary. Public users should call
-  `IconGrid.to_netcdf(path)` for in-memory grids or
-  `generate_grid_to_netcdf(...)` for export-first global generation.
+- NetCDF export is an internal module boundary. Public users call
+  `IconGrid.to_netcdf(path)` when they already have an in-memory grid, or
+  `generate_grid_to_netcdf(...)` when the file is the desired result. The latter
+  dispatches every grid family and selects compact export-first generation for
+  large global grids.
 - For compatibility with established ICON grid files, spherical NetCDF
   `edgequad_area` values are normalized by `sphere_radius**2`. The exported
   variable is therefore dimensionless (`units = "1"`) and carries a

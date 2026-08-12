@@ -210,30 +210,14 @@ def _assemble_global_grid(
     metric_fields = {} if metrics is None else metrics.fields
     metadata = _gg()._metadata(spec, options, metric_fields)
 
-    grid = _gg().IconGrid(
-        spec=spec,
-        options=options,
-        vertices=geometry.vertices,
-        cells=geometry.cells,
-        lon=geometry.lon,
-        lat=geometry.lat,
-        vertex_lon=geometry.vertex_lon,
-        vertex_lat=geometry.vertex_lat,
-        cell_center_xyz=geometry.cell_center_xyz,
-        cell_vertex_lon=geometry.cell_vertex_lon,
-        cell_vertex_lat=geometry.cell_vertex_lat,
-        edges=topology.edges,
-        cell_edges=topology.cell_edges,
-        edge_cells=topology.edge_cells,
-        edge_center_xyz=topology.edge_center_xyz,
-        edge_lon=topology.edge_lon,
-        edge_lat=topology.edge_lat,
-        icon_connectivity=topology.icon_connectivity,
-        connectivity=topology.connectivity,
-        neighbor_tables=topology.neighbor_tables,
-        geometry=metric_fields,
-        refinement=refinement.fields,
-        metadata=metadata,
+    grid = _gg()._assemble_icon_grid(
+        spec,
+        options,
+        geometry,
+        topology,
+        metric_fields,
+        refinement.fields,
+        metadata,
     )
     return grid
 
