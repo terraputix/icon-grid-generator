@@ -615,7 +615,9 @@ class _RotatedLonLatBoxRegion:
             "half_width_lon",
             "half_width_lat",
         ):
-            object.__setattr__(self, name, _finite_float_option(name, getattr(self, name)))
+            object.__setattr__(
+                self, name, _finite_float_option(name, getattr(self, name))
+            )
         if not -180.0 <= self.pole_lon <= 180.0:
             raise ValueError("pole_lon must be within [-180, 180]")
         if not -90.0 <= self.pole_lat <= 90.0:
@@ -1040,16 +1042,17 @@ def generate_grid_to_netcdf(
 ) -> Path:
     """Generate any supported grid directly to an ICON-style NetCDF file.
 
-    This is the file-oriented counterpart of :func:`generate_grid`. Large global
-    grids automatically use compact staged generation, resumable checkpoints,
-    and bounded NetCDF serialization. Other grids use the same validated
-    in-memory pipeline as :func:`generate_grid` and are then written normally.
+    This is the file-oriented counterpart of :func:`generate_grid`. Every grid
+    family uses the same validated, chunked publication pipeline. Large global
+    grids and the global construction parents of limited-area grids additionally
+    use compact staged generation and resumable disk checkpoints.
 
     ``fields`` accepts the profiles ``"full"``, ``"reduced"``, ``"icon"``, and
     ``"icon4py"`` or an exact iterable of established field names. Grid options
     may be supplied through ``options`` or as direct keyword overrides, with
-    direct overrides taking precedence. ``chunk_size``, ``work_dir``, and
-    ``resume`` affect only checkpointed global generation.
+    direct overrides taking precedence. ``chunk_size`` bounds file-oriented
+    selection and serialization work. ``work_dir`` and ``resume`` control any
+    multilevel checkpoint stages needed by the requested grid family.
     """
     from ._netcdf import resolve_icon_netcdf_fields
 
@@ -1060,15 +1063,9 @@ def generate_grid_to_netcdf(
         grid_options,
     )
 
-    if not isinstance(grid_spec, GlobalGridSpec):
-        return _generate_resolved_grid(grid_spec, resolved_options).to_netcdf(
-            path,
-            fields=selected_fields,
-        )
+    from ._pipeline import generate_grid_to_netcdf as generate_to_file
 
-    from ._streaming import generate_global_grid_to_netcdf
-
-    return generate_global_grid_to_netcdf(
+    return generate_to_file(
         grid_spec,
         resolved_options,
         path,
@@ -1087,9 +1084,7 @@ def _prepare_grid_generation(
     """Normalize and validate one request for either public generation path."""
     grid_spec = parse_grid_spec(spec) if isinstance(spec, str) else spec
     if not isinstance(grid_spec, _SUPPORTED_GRID_SPEC_TYPES):
-        raise TypeError(
-            "spec must be an ICON R<n>B<k> string or a supported grid spec"
-        )
+        raise TypeError("spec must be an ICON R<n>B<k> string or a supported grid spec")
 
     resolved_options = _resolve_options(options, option_overrides)
     explicit_optimize_global = _optimize_global_was_explicit(options, option_overrides)
@@ -1295,6 +1290,20 @@ def _generate_limited_area_grid(
         parent,
         immediate_parent_uuid,
     ) = LimitedAreaExtractor().build(spec, options)
+    return _assemble_limited_area_grid(
+        spec,
+        options,
+        (geometry, topology, metrics, refinement, parent, immediate_parent_uuid),
+    )
+
+
+def _assemble_limited_area_grid(
+    spec: LimitedAreaGridSpec,
+    options: IconGridOptions,
+    result: tuple[Any, Any, Any, Any, Any, str],
+) -> IconGrid:
+    """Assemble shared regional output from either parent representation."""
+    geometry, topology, metrics, refinement, parent, immediate_parent_uuid = result
     metadata = _metadata(
         spec,
         options,
@@ -1611,8 +1620,7 @@ def _great_circle_interpolate(
     if np.isclose(sine, 0.0):
         return _normalize((1.0 - fraction) * first + fraction * second)
     point = (
-        np.sin((1.0 - fraction) * angle) * first
-        + np.sin(fraction * angle) * second
+        np.sin((1.0 - fraction) * angle) * first + np.sin(fraction * angle) * second
     ) / sine
     return _normalize(point)
 

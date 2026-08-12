@@ -12,8 +12,9 @@ grids without depending on ICON model runtimes or stencil frameworks.
   experiments; coupled skew tori remain an explicit option.
 - Limited-area grids extracted from generated global parent grids.
 - ICON-style NetCDF export when the optional `netCDF4` dependency is installed.
-- One file-oriented NetCDF generation API for every grid family, with resumable
-  disk checkpoints for global grids too large to retain in memory.
+- One chunked, atomic file-oriented NetCDF generation API for every grid family,
+  with resumable disk checkpoints for large global grids and limited-area
+  construction parents.
 - `full`, `reduced`, `icon`, and `icon4py` NetCDF field profiles plus exact
   custom field selection.
 - In-memory geometry, topology, connectivity, metric, and refinement arrays for
@@ -54,7 +55,7 @@ memory, and storage requirements.
 | --- | --- |
 | In-memory grid for analysis | `generate_grid("R2B4")` |
 | Any grid written directly | `generate_grid_to_netcdf(spec, path)` |
-| Large global grid file | `generate_grid_to_netcdf("R2B8", ...)` |
+| Large global or LAM file | `generate_grid_to_netcdf(spec, path, ...)` |
 | Raw topology checks | `generate_grid("R2B4", optimize_global=False)` |
 | Periodic planar experiment | `TorusGridSpec(...)` |
 | Regional extract from a global parent | `LimitedAreaGridSpec(...)` |

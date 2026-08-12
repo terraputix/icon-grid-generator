@@ -214,12 +214,14 @@ grid. Compaction, incidence construction, bisection, and metric calculation use
 typed arrays and the existing accelerated kernels where available.
 
 Limited-area specs can be passed to either `generate_grid()` or the file-oriented
-`generate_grid_to_netcdf()` API, but both currently hold the coarse global parent
-until the compact regional arrays have been built. A fully checkpointed
-limited-area implementation analogous to the global export-first engine remains
-future work. Until that exists, CH-scale runs should use `max_cells=None`, the
-`accelerate` extra, explicit disk-backed scratch for surrounding workflows, and
-sufficient node memory.
+`generate_grid_to_netcdf()` API. The in-memory call deliberately returns a full
+`IconGrid` and therefore retains its generated construction parent during
+extraction. The file-oriented call instead uses the compact global engine,
+including resumable bisection checkpoints above the base-stage budget, and
+evaluates region predicates in bounded cell chunks. It materializes only the
+selected regional mesh for boundary ordering, regional metrics, and export.
+High-resolution parents require `max_cells=None`, the `accelerate` extra, and
+disk-backed output/checkpoint storage.
 
 Standalone non-periodic planar specs also remain on their existing mirrored
 metric and zero-control conventions. Applying the shared policy/indexing layer

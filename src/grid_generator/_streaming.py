@@ -72,8 +72,12 @@ class _CompactGlobalGrid:
         return self.spec.name
 
     @property
-    def metadata(self) -> dict[str, int]:
-        return {"grid_geometry": 1}
+    def metadata(self) -> dict[str, Any]:
+        # Keep the compact value usable anywhere a generated global parent is
+        # needed without retaining the parent's derived geometry arrays.
+        from . import grid_generator as gg
+
+        return gg._metadata(self.spec, self.options)
 
     @property
     def icon_connectivity(self) -> dict[str, np.ndarray]:
@@ -118,7 +122,9 @@ class _CheckpointStore:
                 return None
 
         def array(name: str) -> np.ndarray:
-            filename = f"{snapshot}.{name}.npy" if snapshot is not None else f"{name}.npy"
+            filename = (
+                f"{snapshot}.{name}.npy" if snapshot is not None else f"{name}.npy"
+            )
             return np.load(stage / filename, mmap_mode="r", allow_pickle=False)
 
         try:
@@ -237,14 +243,39 @@ def generate_global_grid_to_netcdf(
         or chunk_size <= 0
     ):
         raise ValueError("chunk_size must be a positive integer")
-    base_bisection = _in_memory_base_bisection(spec)
-    if spec.expected_cells <= DEFAULT_IN_MEMORY_BASE_CELLS:
-        from . import grid_generator as gg
+    compact = compact_global_grid_for_export(
+        spec,
+        options,
+        output_path,
+        work_dir=work_dir,
+        resume=resume,
+    )
+    return _write_compact_global_grid(
+        compact,
+        output_path,
+        chunk_size=chunk_size,
+        selected_fields=selected_fields,
+    )
 
-        return gg._generate_resolved_grid(spec, options).to_netcdf(
-            path,
-            fields=selected_fields,
-        )
+
+def compact_global_grid_for_export(
+    spec: Any,
+    options: Any,
+    path: str | Path,
+    *,
+    work_dir: str | Path | None = None,
+    resume: bool = True,
+    final_provenance: bool = True,
+) -> _CompactGlobalGrid:
+    """Build a compact global grid for another file-oriented grid family.
+
+    Small parents are compacted immediately. Parents above the in-memory base
+    budget use the same accelerated, checkpointed stages as direct global
+    export, with checkpoints rooted beside the requested final output unless a
+    work directory was supplied explicitly.
+    """
+    output_path = Path(path)
+    base_bisection = _in_memory_base_bisection(spec)
     if base_bisection is None:
         raise ValueError(
             "export-first generation cannot bound the initial root stage; "
@@ -253,34 +284,31 @@ def generate_global_grid_to_netcdf(
             "acceptable, or use the in-memory generate_grid workflow with "
             "sufficient memory"
         )
-    if not _accelerated.should_use_numba(options.accelerator, spec.expected_cells):
-        raise ModuleNotFoundError(
-            "streamed high-resolution generation requires installing the "
-            "'accelerate' extra and using accelerator='auto' or 'numba'"
-        )
-    from . import grid_generator as gg
+    checkpoint_store = None
+    if spec.expected_cells > DEFAULT_IN_MEMORY_BASE_CELLS:
+        if not _accelerated.should_use_numba(options.accelerator, spec.expected_cells):
+            raise ModuleNotFoundError(
+                "streamed high-resolution generation requires installing the "
+                "'accelerate' extra and using accelerator='auto' or 'numba'"
+            )
+        from . import grid_generator as gg
 
-    checkpoint_root = (
-        Path(work_dir)
-        if work_dir is not None
-        else output_path.parent / f".{output_path.name}.work"
-    )
-    configuration_spec = gg.GlobalGridSpec(root=spec.root, bisections=0)
-    checkpoint_store = _CheckpointStore(
-        checkpoint_root,
-        gg._spec_uuid(configuration_spec, options),
-    )
-    compact = _generate_compact_global_grid(
+        checkpoint_root = (
+            Path(work_dir)
+            if work_dir is not None
+            else output_path.parent / f".{output_path.name}.work"
+        )
+        configuration_spec = gg.GlobalGridSpec(root=spec.root, bisections=0)
+        checkpoint_store = _CheckpointStore(
+            checkpoint_root,
+            gg._spec_uuid(configuration_spec, options),
+        )
+    return _generate_compact_global_grid(
         spec,
         options,
         checkpoint_store=checkpoint_store,
         resume=resume,
-    )
-    return _write_compact_global_grid(
-        compact,
-        output_path,
-        chunk_size=chunk_size,
-        selected_fields=selected_fields,
+        final_provenance=final_provenance,
     )
 
 
@@ -299,6 +327,7 @@ def _generate_compact_global_grid(
     *,
     checkpoint_store: _CheckpointStore | None = None,
     resume: bool = True,
+    final_provenance: bool = True,
 ) -> _CompactGlobalGrid:
     """Generate staged global topology while shedding derived parent fields."""
     from . import grid_generator as gg
@@ -314,6 +343,7 @@ def _generate_compact_global_grid(
             if (
                 compact is not None
                 and bisection == spec.bisections
+                and final_provenance
                 and compact.provenance is None
             ):
                 # Intermediate checkpoints omit export-only parent mappings. They
@@ -333,7 +363,7 @@ def _generate_compact_global_grid(
         compact = _refine_compact_global_grid(
             compact,
             child_spec,
-            terminal=bisection == spec.bisections,
+            terminal=(bisection == spec.bisections and final_provenance),
         )
         if checkpoint_store is not None:
             checkpoint_store.save(compact)
@@ -1552,7 +1582,21 @@ def _write_hierarchy_fields(
         return
     provenance = grid.provenance
     if provenance is None:
-        raise RuntimeError("streamed global export requires final-stage provenance")
+        if grid.spec.bisections != 0:
+            raise RuntimeError("streamed global export requires final-stage provenance")
+        for name, dimension in (
+            ("parent_cell_index", "cell"),
+            ("parent_cell_type", "cell"),
+            ("edge_parent_type", "edge"),
+            ("parent_edge_index", "edge"),
+            ("parent_vertex_index", "vertex"),
+        ):
+            if name not in variables:
+                continue
+            for section in _chunk_slices(grid.dims[dimension], chunk_size):
+                variables[name][section] = 0
+        _write_child_hierarchy_fields(variables, grid, chunk_size)
+        return
     _write_parent_hierarchy_fields(variables, provenance, chunk_size)
     _write_child_hierarchy_fields(variables, grid, chunk_size)
 

@@ -14,11 +14,13 @@ from grid_generator import (
     LimitedAreaGridSpec,
     ParallelogramGridSpec,
     Region,
+    RegionSelectionOptions,
     TorusGridSpec,
     generate_grid,
     generate_grid_to_netcdf,
 )
 from grid_generator import _netcdf
+from grid_generator import _limited_area
 from grid_generator import _streaming
 from grid_generator.cutting import cut_grid
 from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSpec
@@ -26,6 +28,32 @@ from grid_generator.planar import RaggedOrthogonalGridSpec, StretchedTorusGridSp
 
 def unit_rows(points):
     return points / np.linalg.norm(points, axis=1)[:, np.newaxis]
+
+
+def assert_netcdf_variables_equal(reference_path, actual_path):
+    netcdf4 = pytest.importorskip("netCDF4")
+    with (
+        netcdf4.Dataset(reference_path) as reference,
+        netcdf4.Dataset(actual_path) as actual,
+    ):
+        assert list(actual.dimensions) == list(reference.dimensions)
+        assert list(actual.variables) == list(reference.variables)
+        for name, expected_variable in reference.variables.items():
+            actual_variable = actual.variables[name]
+            assert actual_variable.dtype == expected_variable.dtype
+            assert actual_variable.dimensions == expected_variable.dimensions
+            assert set(actual_variable.ncattrs()) == set(expected_variable.ncattrs())
+            expected = expected_variable[:]
+            values = actual_variable[:]
+            if np.issubdtype(expected.dtype, np.floating):
+                assert np.allclose(
+                    values,
+                    expected,
+                    rtol=1.0e-13,
+                    atol=1.0e-12,
+                ), name
+            else:
+                assert np.array_equal(values, expected), name
 
 
 def test_netcdf_field_profiles_have_audited_contract_sizes():
@@ -40,17 +68,21 @@ def test_netcdf_field_profiles_have_audited_contract_sizes():
     assert profiles["reduced"] == profiles["icon"] | profiles["icon4py"]
 
 
-def test_netcdf_schema_definition_matches_in_memory_field_assembly():
+def test_netcdf_schema_definition_matches_chunked_field_assembly(tmp_path):
+    netcdf4 = pytest.importorskip("netCDF4")
     definitions = _netcdf._icon_variable_definitions()
     assert tuple(name for name, *_ in definitions) == _netcdf.ICON_NETCDF_FIELD_NAMES
 
     schema = {name: (dims, dtype, attrs) for name, dims, dtype, attrs in definitions}
-    fields = _netcdf._icon_fields(generate_grid("R01B01"))
-    for name, dims, data, attrs in fields:
-        expected_dims, expected_dtype, expected_attrs = schema[name]
-        assert dims == expected_dims
-        assert np.asarray(data).dtype == expected_dtype
-        assert expected_attrs.items() <= attrs.items()
+    output = generate_grid("R01B01").to_netcdf(tmp_path / "schema.nc")
+    with netcdf4.Dataset(output) as dataset:
+        assert tuple(dataset.variables) == _netcdf.ICON_NETCDF_FIELD_NAMES
+        for name, variable in dataset.variables.items():
+            expected_dims, expected_dtype, expected_attrs = schema[name]
+            assert variable.dimensions == expected_dims
+            assert variable.dtype == expected_dtype
+            actual_attrs = {attr: variable.getncattr(attr) for attr in variable.ncattrs()}
+            assert expected_attrs.items() <= actual_attrs.items()
 
 
 @pytest.mark.parametrize("profile", ["full", "reduced", "icon", "icon4py"])
@@ -173,6 +205,282 @@ def test_streamed_global_netcdf_matches_in_memory_export(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
+    "spec",
+    [
+        "R01B00",
+        TorusGridSpec(nx=4, ny=4, edge_length=1.0),
+        StretchedTorusGridSpec(nx=4, ny=4, edge_length=1.0),
+        ChannelGridSpec(nx=4, ny=3, edge_length=1.0),
+        ParallelogramGridSpec(nx=4, ny=3, edge_length=1.0, shear=0.2),
+        RaggedOrthogonalGridSpec(nx=4, ny=3, dx=1.0, dy=0.8),
+        LimitedAreaGridSpec(
+            parent="R01B02",
+            region=Region.circle(lon=0.0, lat=0.0, radius_degrees=55.0),
+            local_optimization_iterations=5,
+        ),
+        LimitedAreaGridSpec(
+            parent="R01B02",
+            region=Region.rotated_lonlat_box(
+                pole_lon=-170.0,
+                pole_lat=43.0,
+                center_lon=-1.0,
+                center_lat=-0.5,
+                half_width_lon=30.0,
+                half_width_lat=20.0,
+            ),
+            construction="cut_final",
+            selection=RegionSelectionOptions(
+                inclusion="overlap",
+                cleanup="none",
+            ),
+            local_optimization_iterations=0,
+        ),
+    ],
+    ids=[
+        "global",
+        "torus",
+        "stretched-torus",
+        "channel",
+        "parallelogram",
+        "ragged",
+        "limited-refine-last",
+        "limited-cut-final",
+    ],
+)
+def test_common_file_pipeline_matches_in_memory_export(spec, tmp_path):
+    options = {
+        "max_cells": None,
+        "optimize_global": False,
+    }
+    reference = generate_grid(spec, options).to_netcdf(
+        tmp_path / "reference.nc",
+        fields="full",
+    )
+    actual = generate_grid_to_netcdf(
+        spec,
+        tmp_path / "actual.nc",
+        options,
+        fields="full",
+        chunk_size=7,
+    )
+
+    assert_netcdf_variables_equal(reference, actual)
+
+
+def test_limited_area_parent_uses_and_resumes_global_checkpoints(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("netCDF4")
+    pytest.importorskip("numba")
+    monkeypatch.setattr(_streaming, "DEFAULT_IN_MEMORY_BASE_CELLS", 20)
+    spec = LimitedAreaGridSpec(
+        parent="R01B03",
+        region=Region.circle(lon=0.0, lat=0.0, radius_degrees=35.0),
+        local_optimization_iterations=0,
+    )
+    options = {
+        "max_cells": None,
+        "accelerator": "numba",
+        "optimize_global": False,
+    }
+    work_dir = tmp_path / "checkpoints"
+    first = generate_grid_to_netcdf(
+        spec,
+        tmp_path / "first.nc",
+        options,
+        work_dir=work_dir,
+        chunk_size=11,
+    )
+    parent_manifest = work_dir / "R01B02" / "manifest.json"
+    assert parent_manifest.is_file()
+    assert '"has_provenance": false' in parent_manifest.read_text()
+
+    def fail_refinement(*_args, **_kwargs):
+        raise AssertionError("completed parent checkpoint was not resumed")
+
+    monkeypatch.setattr(
+        _streaming,
+        "_refine_compact_global_grid",
+        fail_refinement,
+    )
+    second = generate_grid_to_netcdf(
+        spec,
+        tmp_path / "second.nc",
+        options,
+        work_dir=work_dir,
+        chunk_size=11,
+    )
+    assert_netcdf_variables_equal(first, second)
+
+
+def test_compact_limited_area_selection_respects_chunk_size(monkeypatch):
+    parent = _streaming._compact_from_icon_grid(
+        generate_grid("R01B02", optimize_global=False)
+    )
+    spec = LimitedAreaGridSpec(
+        parent="R01B02",
+        region=Region.circle(lon=0.0, lat=0.0, radius_degrees=40.0),
+        selection=RegionSelectionOptions(cleanup="none"),
+    )
+    from grid_generator import grid_generator as gg
+
+    cell_centers = gg._cell_centers
+    observed = []
+
+    def tracked_cell_centers(vertices, cells, *args, **kwargs):
+        observed.append(cells.shape[0])
+        return cell_centers(vertices, cells, *args, **kwargs)
+
+    monkeypatch.setattr(gg, "_cell_centers", tracked_cell_centers)
+    selected = _limited_area._selected_compact_cells(parent, spec, chunk_size=7)
+
+    assert selected.size > 0
+    assert max(observed) <= 7
+
+
+@pytest.mark.parametrize(
+    ("region", "inclusion"),
+    [
+        (Region.circle(lon=10.0, lat=5.0, radius_degrees=35.0), "circumradius"),
+        (
+            Region.lonlat_box(
+                lon_min=-35.0,
+                lon_max=25.0,
+                lat_min=-20.0,
+                lat_max=30.0,
+            ),
+            "circumradius",
+        ),
+        (
+            Region.rectangle(
+                center_lon=5.0,
+                center_lat=-10.0,
+                width_degrees=50.0,
+                height_degrees=30.0,
+                angle_degrees=20.0,
+            ),
+            "circumradius",
+        ),
+        (
+            Region.rotated_lonlat_box(
+                pole_lon=-170.0,
+                pole_lat=43.0,
+                center_lon=-1.0,
+                center_lat=-0.5,
+                half_width_lon=25.0,
+                half_width_lat=15.0,
+            ),
+            "circumradius",
+        ),
+        (
+            Region.polygon(
+                points=((-35.0, -5.0), (0.0, 30.0), (35.0, -5.0)),
+            ),
+            "circumradius",
+        ),
+        (Region.circle(lon=10.0, lat=5.0, radius_degrees=35.0), "center"),
+        (
+            Region.polygon(
+                points=((-35.0, -5.0), (0.0, 30.0), (35.0, -5.0)),
+            ),
+            "overlap",
+        ),
+    ],
+    ids=[
+        "circle",
+        "lonlat-box",
+        "rectangle",
+        "rotated-box",
+        "polygon",
+        "center",
+        "overlap",
+    ],
+)
+def test_compact_limited_area_selection_matches_in_memory_policy(
+    region,
+    inclusion,
+):
+    parent = generate_grid("R02B02", optimize_global=False)
+    compact = _streaming._compact_from_icon_grid(parent)
+    spec = LimitedAreaGridSpec(
+        parent="R02B02",
+        region=region,
+        selection=RegionSelectionOptions(
+            inclusion=inclusion,
+            cleanup="none",
+        ),
+    )
+
+    expected = _limited_area._selected_cells(parent, spec)
+    actual = _limited_area._selected_compact_cells(compact, spec, chunk_size=17)
+
+    assert np.array_equal(actual, expected)
+
+
+def test_file_pipeline_validates_chunk_size_for_planar_grid(tmp_path):
+    output = tmp_path / "invalid.nc"
+    with pytest.raises(ValueError, match="positive integer"):
+        generate_grid_to_netcdf(
+            ChannelGridSpec(nx=4, ny=3, edge_length=1.0),
+            output,
+            chunk_size=0,
+        )
+    assert not output.exists()
+
+
+def test_planar_file_pipeline_builds_export_only_fields_in_chunks(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("netCDF4")
+    observed = []
+    edge_bounds = _netcdf._edge_coordinate_bounds
+
+    def tracked_edge_bounds(grid, coordinate, *, section=slice(None)):
+        observed.append(section.stop - (section.start or 0))
+        return edge_bounds(grid, coordinate, section=section)
+
+    monkeypatch.setattr(_netcdf, "_edge_coordinate_bounds", tracked_edge_bounds)
+    output = generate_grid_to_netcdf(
+        ParallelogramGridSpec(nx=9, ny=7, edge_length=1.0, shear=0.2),
+        tmp_path / "chunked-planar.nc",
+        chunk_size=5,
+    )
+
+    assert output.is_file()
+    assert observed
+    assert max(observed) <= 5
+
+
+def test_non_global_chunked_writer_does_not_publish_incomplete_output(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("netCDF4")
+    field_chunk = _netcdf._icon_field_chunk
+
+    def fail_during_metrics(grid, name, section):
+        if name == "edge_length":
+            raise RuntimeError("injected planar metric failure")
+        return field_chunk(grid, name, section)
+
+    monkeypatch.setattr(_netcdf, "_icon_field_chunk", fail_during_metrics)
+    output = tmp_path / "planar.nc"
+    output.write_bytes(b"previous completed output")
+
+    with pytest.raises(RuntimeError, match="injected planar metric failure"):
+        generate_grid_to_netcdf(
+            ChannelGridSpec(nx=5, ny=4, edge_length=1.0),
+            output,
+            chunk_size=5,
+        )
+
+    assert output.read_bytes() == b"previous completed output"
+    assert (tmp_path / "planar.nc.partial").is_file()
+
+
+@pytest.mark.parametrize(
     "fields",
     [
         "reduced",
@@ -291,9 +599,7 @@ def test_streamed_base_stage_is_selected_by_cell_count(
     spec,
     expected_base_bisection,
 ):
-    assert (
-        _streaming._in_memory_base_bisection(spec) == expected_base_bisection
-    )
+    assert _streaming._in_memory_base_bisection(spec) == expected_base_bisection
 
 
 def test_streamed_generation_rejects_unbounded_root_stage(tmp_path):
@@ -502,12 +808,8 @@ def test_planar_cut_netcdf_retains_physical_edgequad_area(tmp_path):
         ),
     )
 
-    assert grid.metadata["domain_length"] == pytest.approx(
-        parent.spec.domain_length
-    )
-    assert grid.metadata["domain_height"] == pytest.approx(
-        parent.spec.domain_height
-    )
+    assert grid.metadata["domain_length"] == pytest.approx(parent.spec.domain_length)
+    assert grid.metadata["domain_height"] == pytest.approx(parent.spec.domain_height)
     assert grid.metadata["periodic_layout"] == parent.spec.periodic_layout
 
     path = grid.to_netcdf(tmp_path / "planar-cut.nc")
@@ -595,21 +897,15 @@ def test_limited_area_icon_profile_selects_spherical_reconstruction(tmp_path):
         (RaggedOrthogonalGridSpec(nx=3, ny=2, dx=2.0, dy=1.5), 4),
     ],
 )
-def test_planar_netcdf_uses_icon_geometry_enum(
-    spec, expected_geometry, tmp_path
-):
+def test_planar_netcdf_uses_icon_geometry_enum(spec, expected_geometry, tmp_path):
     netcdf4 = pytest.importorskip("netCDF4")
     grid = generate_grid(spec)
     path = grid.to_netcdf(tmp_path / f"planar-{expected_geometry}.nc")
 
     with netcdf4.Dataset(path) as dataset:
         assert dataset.getncattr("grid_geometry") == expected_geometry
-        assert dataset.getncattr("domain_length") == pytest.approx(
-            spec.domain_length
-        )
-        assert dataset.getncattr("domain_height") == pytest.approx(
-            spec.domain_height
-        )
+        assert dataset.getncattr("domain_length") == pytest.approx(spec.domain_length)
+        assert dataset.getncattr("domain_height") == pytest.approx(spec.domain_height)
         assert "open_boundary" not in dataset.ncattrs()
         assert np.allclose(
             dataset.variables["cartesian_x_vertices"][:],
@@ -891,28 +1187,19 @@ def test_to_netcdf_reports_missing_netcdf4(monkeypatch, tmp_path):
 
 def test_netcdf_writer_releases_field_before_requesting_next(monkeypatch, tmp_path):
     grid = generate_grid("R01B00")
+    previous = None
 
-    class TrackingFields:
-        def __init__(self):
-            self.index = 0
-            self.previous = None
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            if self.previous is not None:
-                assert self.previous() is None
-            if self.index == 2:
-                raise StopIteration
-            data = np.full(grid.dims["cell"], self.index, dtype=np.float64)
-            self.previous = weakref.ref(data)
-            self.index += 1
-            return f"field_{self.index}", ("cell",), data, {}
+    def tracking_chunk(unused_grid, name, section):
+        nonlocal previous
+        if previous is not None:
+            assert previous() is None
+        data = np.full(section.stop - (section.start or 0), len(name), dtype=np.float64)
+        previous = weakref.ref(data)
+        return data
 
     class Variable:
         def __setitem__(self, key, value):
-            assert key == slice(None)
+            assert key == (slice(0, grid.dims["cell"]),)
             assert value.shape == (grid.dims["cell"],)
 
         def setncattr(self, name, value):
@@ -940,8 +1227,12 @@ def test_netcdf_writer_releases_field_before_requesting_next(monkeypatch, tmp_pa
     monkeypatch.setitem(sys.modules, "netCDF4", types.SimpleNamespace(Dataset=Dataset))
     monkeypatch.setattr(
         _netcdf,
-        "_icon_fields",
-        lambda unused_grid, unused_fields: TrackingFields(),
+        "_icon_variable_definitions",
+        lambda: [
+            ("clon", ("cell",), np.dtype(np.float64), {}),
+            ("clat", ("cell",), np.dtype(np.float64), {}),
+        ],
     )
+    monkeypatch.setattr(_netcdf, "_icon_field_chunk", tracking_chunk)
 
     _netcdf.write_icon_grid(grid, tmp_path / "lifetime.nc")

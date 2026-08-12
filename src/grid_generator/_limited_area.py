@@ -42,9 +42,47 @@ class LimitedAreaExtractor:
             construction = "cut_final"
             generation_spec = spec.parent
         parent = gg.generate_grid(generation_spec, options=options)
-        selected = _selected_cells(parent, spec)
-        selected = _clean_selection(parent, selected, spec.selection.cleanup)
-        selected = _expand_cells(parent, selected, _buffer_rings(spec))
+        return self._finish(spec, options, parent, construction, compact=False)
+
+    def build_from_compact_parent(
+        self,
+        spec: Any,
+        options: Any,
+        parent: Any,
+        construction: str,
+        *,
+        chunk_size: int,
+    ) -> tuple[GeometryData, TopologyData, MetricsData, RefinementData, Any, str]:
+        """Build from compact global topology without expanding the parent."""
+        return self._finish(
+            spec,
+            options,
+            parent,
+            construction,
+            compact=True,
+            chunk_size=chunk_size,
+        )
+
+    def _finish(
+        self,
+        spec: Any,
+        options: Any,
+        parent: Any,
+        construction: str,
+        *,
+        compact: bool,
+        chunk_size: int = 1_000_000,
+    ) -> tuple[GeometryData, TopologyData, MetricsData, RefinementData, Any, str]:
+        if compact:
+            selected = _selected_compact_cells(parent, spec, chunk_size)
+            selected = _clean_compact_selection(
+                parent, selected, spec.selection.cleanup
+            )
+            selected = _expand_compact_cells(parent, selected, _buffer_rings(spec))
+        else:
+            selected = _selected_cells(parent, spec)
+            selected = _clean_selection(parent, selected, spec.selection.cleanup)
+            selected = _expand_cells(parent, selected, _buffer_rings(spec))
         if selected.size == 0:
             raise ValueError("limited-area selection does not contain any cells")
         parent_cells = np.asarray(selected, dtype=np.int32)
@@ -54,8 +92,14 @@ class LimitedAreaExtractor:
                 immediate_parent_uuid,
                 parent_cells,
             )
-        geometry = _compact_geometry(parent, parent_cells)
-        topology = _open_topology(parent, geometry, parent_cells, options)
+        if compact:
+            geometry = _compact_spherical_geometry(parent, parent_cells, options)
+            topology = _open_compact_spherical_topology(
+                parent, geometry, parent_cells, options
+            )
+        else:
+            geometry = _compact_geometry(parent, parent_cells)
+            topology = _open_topology(parent, geometry, parent_cells, options)
         if construction == "refine_last":
             geometry, topology = _refine_open_grid(geometry, topology, options)
             geometry = _optimize_local_geometry(
@@ -85,6 +129,224 @@ class LimitedAreaExtractor:
         return geometry, topology, metrics, refinement, parent, immediate_parent_uuid
 
 
+def _selected_compact_cells(
+    parent: Any,
+    spec: Any,
+    chunk_size: int,
+) -> np.ndarray:
+    """Select a spherical parent in bounded chunks of cell geometry."""
+    from . import grid_generator as gg
+    from ._streaming import _chunk_slices
+
+    selected: list[np.ndarray] = []
+    for section in _chunk_slices(parent.dims["cell"], chunk_size):
+        cells = np.asarray(parent.cells[section], dtype=np.int32)
+        centers = gg._cell_centers(
+            parent.vertices,
+            cells,
+            parent.options.radius,
+            parent.options.accelerator,
+        )
+        lon, lat = gg._lon_lat(centers)
+        mask = _compact_region_mask(
+            parent.vertices,
+            cells,
+            centers,
+            lon,
+            lat,
+            spec.region,
+            spec.selection.inclusion,
+        )
+        if np.any(mask):
+            start = section.start or 0
+            selected.append(np.flatnonzero(mask).astype(np.int64) + start)
+    if not selected:
+        return np.empty(0, dtype=np.int32)
+    return np.concatenate(selected).astype(np.int32, copy=False)
+
+
+def _compact_region_mask(
+    vertices: np.ndarray,
+    cells: np.ndarray,
+    centers: np.ndarray,
+    lon: np.ndarray,
+    lat: np.ndarray,
+    region: Any,
+    inclusion: str,
+) -> np.ndarray:
+    center_mask = _region_mask(lon, lat, region, centers)
+    if inclusion == "center":
+        return center_mask
+
+    name = region.__class__.__name__.removeprefix("_")
+    if inclusion == "overlap" or name == "PolygonRegion":
+        flat_vertices = vertices[cells].reshape(-1, 3)
+        vertex_lon, vertex_lat = _lon_lat_points(flat_vertices)
+        vertex_mask = _region_mask(
+            vertex_lon,
+            vertex_lat,
+            region,
+            flat_vertices,
+        ).reshape(cells.shape)
+        return center_mask | np.any(vertex_mask, axis=1)
+
+    first_vertices = vertices[cells[:, 0]]
+    cosine = np.sum(centers * first_vertices, axis=1) / (
+        np.linalg.norm(centers, axis=1) * np.linalg.norm(first_vertices, axis=1)
+    )
+    radius = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+    if name == "CircleRegion":
+        distance = _angular_distance_degrees(lon, lat, region.lon, region.lat)
+        return distance < radius + region.radius_degrees
+    if name == "OrientedRectangleRegion":
+        dx = _wrapped_lon_delta(lon - region.center_lon) * cos(
+            radians(region.center_lat)
+        )
+        dy = lat - region.center_lat
+        angle = radians(region.angle_degrees)
+        x_rot = dx * np.cos(angle) + dy * np.sin(angle)
+        y_rot = -dx * np.sin(angle) + dy * np.cos(angle)
+        return (np.abs(x_rot) <= 0.5 * region.width_degrees + radius) & (
+            np.abs(y_rot) <= 0.5 * region.height_degrees + radius
+        )
+    if name == "RotatedLonLatBoxRegion":
+        from . import grid_generator as gg
+
+        rotated = gg._unrotate_latlon(centers, region.pole_lon, region.pole_lat)
+        rotated_lon, rotated_lat = gg._lon_lat(rotated)
+        return (
+            np.abs(_wrapped_lon_delta(rotated_lon - region.center_lon))
+            <= region.half_width_lon + radius
+        ) & (np.abs(rotated_lat - region.center_lat) <= region.half_width_lat + radius)
+    if name == "LonLatBoxRegion":
+        longitude_span = float(np.mod(region.lon_max - region.lon_min, 360.0))
+        if np.isclose(longitude_span, 0.0) and region.lon_min != region.lon_max:
+            longitude_span = 360.0
+        half_width_lon = 0.5 * longitude_span
+        center_lon = float(_wrapped_lon_delta(region.lon_min + half_width_lon))
+        center_lat = 0.5 * (region.lat_min + region.lat_max)
+        half_width_lat = 0.5 * (region.lat_max - region.lat_min)
+        return (
+            (np.abs(_wrapped_lon_delta(lon - center_lon)) <= half_width_lon + radius)
+            & (lat >= center_lat - half_width_lat - radius)
+            & (lat <= center_lat + half_width_lat + radius)
+        )
+    raise TypeError(f"unsupported circumradius region {name}")
+
+
+def _lon_lat_points(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    from . import grid_generator as gg
+
+    return gg._lon_lat(points)
+
+
+def _compact_cell_neighbors(parent: Any, cells: np.ndarray) -> np.ndarray:
+    cell_edges = np.asarray(parent.cell_edges[cells], dtype=np.int32)
+    adjacent = np.asarray(parent.edge_cells[cell_edges], dtype=np.int32)
+    owners = cells[:, np.newaxis]
+    owner_is_first = adjacent[:, :, 0] == owners
+    owner_is_second = adjacent[:, :, 1] == owners
+    if not np.all(owner_is_first ^ owner_is_second):
+        raise RuntimeError("compact parent contains inconsistent cell adjacency")
+    return np.where(owner_is_first, adjacent[:, :, 1], adjacent[:, :, 0])
+
+
+def _clean_compact_selection(
+    parent: Any,
+    selected: np.ndarray,
+    policy: str,
+) -> np.ndarray:
+    if policy == "none" or selected.size < 4:
+        return selected
+    neighbors = _compact_cell_neighbors(parent, selected)
+    positions = np.searchsorted(selected, neighbors)
+    safe = np.minimum(positions, selected.size - 1)
+    present = (
+        (neighbors >= 0) & (positions < selected.size) & (selected[safe] == neighbors)
+    )
+    retained = selected[np.sum(present, axis=1) > 1]
+    return retained if retained.size else selected
+
+
+def _expand_compact_cells(
+    parent: Any,
+    selected: np.ndarray,
+    depth: int,
+) -> np.ndarray:
+    expanded = np.unique(selected).astype(np.int32, copy=False)
+    frontier = expanded
+    for _ in range(depth):
+        neighbors = _compact_cell_neighbors(parent, frontier).reshape(-1)
+        neighbors = neighbors[(neighbors >= 0) & (neighbors < parent.dims["cell"])]
+        candidates = np.unique(neighbors).astype(np.int32, copy=False)
+        positions = np.searchsorted(expanded, candidates)
+        safe = np.minimum(positions, max(expanded.size - 1, 0))
+        present = (positions < expanded.size) & (expanded[safe] == candidates)
+        frontier = candidates[~present]
+        if frontier.size == 0:
+            break
+        expanded = np.unique(np.concatenate((expanded, frontier))).astype(
+            np.int32, copy=False
+        )
+    return expanded
+
+
+def _compact_spherical_geometry(
+    parent: Any,
+    parent_cells: np.ndarray,
+    options: Any,
+) -> GeometryData:
+    source_vertices = np.unique(parent.cells[parent_cells].reshape(-1)).astype(
+        np.int32, copy=False
+    )
+    cells = np.searchsorted(source_vertices, parent.cells[parent_cells]).astype(
+        np.int32, copy=False
+    )
+    return _geometry_from_mesh(
+        np.asarray(parent.vertices[source_vertices]),
+        cells,
+        options,
+        source_cell_index=parent_cells,
+        source_vertex_index=source_vertices,
+    )
+
+
+def _open_compact_spherical_topology(
+    parent: Any,
+    geometry: GeometryData,
+    parent_cells: np.ndarray,
+    options: Any,
+) -> TopologyData:
+    source_edge_ids = np.unique(parent.cell_edges[parent_cells].reshape(-1)).astype(
+        np.int32, copy=False
+    )
+    cell_edges = np.searchsorted(
+        source_edge_ids, parent.cell_edges[parent_cells]
+    ).astype(np.int32, copy=False)
+    edges = np.searchsorted(
+        geometry.source_vertex_index, parent.edges[source_edge_ids]
+    ).astype(np.int32, copy=False)
+    source_adjacency = np.asarray(parent.edge_cells[source_edge_ids], dtype=np.int32)
+    positions = np.searchsorted(parent_cells, source_adjacency)
+    safe = np.minimum(positions, parent_cells.size - 1)
+    present = (
+        (source_adjacency >= 0)
+        & (positions < parent_cells.size)
+        & (parent_cells[safe] == source_adjacency)
+    )
+    edge_cells = np.where(present, positions, -1).astype(np.int32)
+    reversed_boundary = (edge_cells[:, 0] < 0) & (edge_cells[:, 1] >= 0)
+    edge_cells[reversed_boundary] = edge_cells[reversed_boundary, ::-1]
+    return _topology_from_mesh(
+        geometry,
+        edges,
+        cell_edges,
+        edge_cells,
+        options,
+        source_edge_index=source_edge_ids,
+    )
+
+
 def _compact_parent_uuid(source_uuid: str, source_cells: np.ndarray) -> str:
     payload = {
         "generator": "grid_generator",
@@ -102,7 +364,9 @@ def _compact_parent_uuid(source_uuid: str, source_cells: np.ndarray) -> str:
     )
 
 
-def cut_existing_grid(parent: Any, spec: Any) -> tuple[GeometryData, TopologyData, MetricsData, RefinementData]:
+def cut_existing_grid(
+    parent: Any, spec: Any
+) -> tuple[GeometryData, TopologyData, MetricsData, RefinementData]:
     """Cut an existing grid using region predicates."""
     selected = _selected_cells_from_regions(parent, spec)
     if spec.mode == "remove":
@@ -190,14 +454,8 @@ def _circumradius_region_mask(parent: Any, region: Any) -> np.ndarray:
     first_vertices = parent.vertices[parent.cells[:, 0]]
     center_norm = np.linalg.norm(centers, axis=1)
     vertex_norm = np.linalg.norm(first_vertices, axis=1)
-    cosine = np.sum(centers * first_vertices, axis=1) / (
-        center_norm * vertex_norm
-    )
-    radius = np.degrees(
-        np.arccos(
-            np.clip(cosine, -1.0, 1.0)
-        )
-    )
+    cosine = np.sum(centers * first_vertices, axis=1) / (center_norm * vertex_norm)
+    radius = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
 
     if name == "CircleRegion":
         distance = _angular_distance_degrees(
@@ -216,9 +474,8 @@ def _circumradius_region_mask(parent: Any, region: Any) -> np.ndarray:
         angle = radians(region.angle_degrees)
         x_rot = dx * np.cos(angle) + dy * np.sin(angle)
         y_rot = -dx * np.sin(angle) + dy * np.cos(angle)
-        return (
-            (np.abs(x_rot) <= 0.5 * region.width_degrees + radius)
-            & (np.abs(y_rot) <= 0.5 * region.height_degrees + radius)
+        return (np.abs(x_rot) <= 0.5 * region.width_degrees + radius) & (
+            np.abs(y_rot) <= 0.5 * region.height_degrees + radius
         )
 
     if name == "LonLatBoxRegion":
@@ -269,16 +526,20 @@ def _region_mask(
             lon_mask = (lon >= region.lon_min) | (lon <= region.lon_max)
         return lon_mask & (lat >= region.lat_min) & (lat <= region.lat_max)
     if name == "CircleRegion":
-        return _angular_distance_degrees(lon, lat, region.lon, region.lat) <= region.radius_degrees
+        return (
+            _angular_distance_degrees(lon, lat, region.lon, region.lat)
+            <= region.radius_degrees
+        )
     if name == "OrientedRectangleRegion":
-        dx = _wrapped_lon_delta(lon - region.center_lon) * cos(radians(region.center_lat))
+        dx = _wrapped_lon_delta(lon - region.center_lon) * cos(
+            radians(region.center_lat)
+        )
         dy = lat - region.center_lat
         angle = radians(region.angle_degrees)
         x_rot = dx * np.cos(angle) + dy * np.sin(angle)
         y_rot = -dx * np.sin(angle) + dy * np.cos(angle)
-        return (
-            (np.abs(x_rot) <= 0.5 * region.width_degrees)
-            & (np.abs(y_rot) <= 0.5 * region.height_degrees)
+        return (np.abs(x_rot) <= 0.5 * region.width_degrees) & (
+            np.abs(y_rot) <= 0.5 * region.height_degrees
         )
     if name == "RotatedLonLatBoxRegion":
         if xyz is None:
@@ -288,9 +549,8 @@ def _region_mask(
         rotated = gg._unrotate_latlon(xyz, region.pole_lon, region.pole_lat)
         rotated_lon, rotated_lat = gg._lon_lat(rotated)
         dx = _wrapped_lon_delta(rotated_lon - region.center_lon)
-        return (
-            (np.abs(dx) <= region.half_width_lon)
-            & (np.abs(rotated_lat - region.center_lat) <= region.half_width_lat)
+        return (np.abs(dx) <= region.half_width_lon) & (
+            np.abs(rotated_lat - region.center_lat) <= region.half_width_lat
         )
     if name == "PolygonRegion":
         return _polygon_mask(lon, lat, region.points)
@@ -352,7 +612,10 @@ def _polygon_mask(
     x = _wrapped_lon_delta(lon - reference)
     y = lat
     polygon = np.asarray(
-        [(_wrapped_lon_delta(point_lon - reference), point_lat) for point_lon, point_lat in points],
+        [
+            (_wrapped_lon_delta(point_lon - reference), point_lat)
+            for point_lon, point_lat in points
+        ],
         dtype=np.float64,
     )
     inside = np.zeros(lon.shape, dtype=bool)
@@ -464,8 +727,12 @@ def _open_topology(
         edge_lon=edge_lon,
         edge_lat=edge_lat,
         icon_connectivity=icon_connectivity,
-        connectivity=_open_public_connectivity(geometry.cells, edges_array, edge_cell_array, icon_connectivity),
-        neighbor_tables=_open_neighbor_tables(geometry.cells, edges_array, edge_cell_array, icon_connectivity),
+        connectivity=_open_public_connectivity(
+            geometry.cells, edges_array, edge_cell_array, icon_connectivity
+        ),
+        neighbor_tables=_open_neighbor_tables(
+            geometry.cells, edges_array, edge_cell_array, icon_connectivity
+        ),
         source_edge_index=source_edge_ids,
     )
 
@@ -572,14 +839,18 @@ def _refine_open_grid(
         geometry.vertices[topology.edges[:, 0]]
         + geometry.vertices[topology.edges[:, 1]]
     )
-    vertices = gg._normalize_rows(
-        np.vstack((geometry.vertices, midpoint_vertices)).astype(np.float64, copy=False)
-    ) * options.radius
-    edge_midpoint_index = old_vertex_count + np.arange(old_edge_count, dtype=np.int32)
-    split_edge_index = (
-        2 * np.arange(old_edge_count, dtype=np.int32)[:, np.newaxis]
-        + np.array([0, 1], dtype=np.int32)
+    vertices = (
+        gg._normalize_rows(
+            np.vstack((geometry.vertices, midpoint_vertices)).astype(
+                np.float64, copy=False
+            )
+        )
+        * options.radius
     )
+    edge_midpoint_index = old_vertex_count + np.arange(old_edge_count, dtype=np.int32)
+    split_edge_index = 2 * np.arange(old_edge_count, dtype=np.int32)[
+        :, np.newaxis
+    ] + np.array([0, 1], dtype=np.int32)
     inner_edge_index = (
         2 * old_edge_count
         + 3 * np.arange(old_cell_count, dtype=np.int32)[:, np.newaxis]
@@ -713,8 +984,8 @@ def _order_open_cells_by_edges(
     edge_centers = gg._edge_centers(vertices, edges, 1.0, accelerator)
     metric_cells = edge_cells.copy()
     missing_edge, missing_side = np.nonzero(metric_cells < 0)
-    metric_cells[missing_edge, missing_side] = (
-        cell_centers.shape[0] + np.arange(missing_edge.size, dtype=np.int32)
+    metric_cells[missing_edge, missing_side] = cell_centers.shape[0] + np.arange(
+        missing_edge.size, dtype=np.int32
     )
     augmented = np.vstack((cell_centers, edge_centers[missing_edge]))
     orientation = gg._edge_system_orientation(
@@ -809,8 +1080,12 @@ def _fill_open_bisection_numpy(
                 edge_midpoint_index[second_edge],
             )
             new_cell_edges[child] = (
-                split_edge_index[first_edge, gg._edge_endpoint_slot(edges[first_edge], vertex)],
-                split_edge_index[second_edge, gg._edge_endpoint_slot(edges[second_edge], vertex)],
+                split_edge_index[
+                    first_edge, gg._edge_endpoint_slot(edges[first_edge], vertex)
+                ],
+                split_edge_index[
+                    second_edge, gg._edge_endpoint_slot(edges[second_edge], vertex)
+                ],
                 inner_edge_index[cell_index, vertex_pos],
             )
     edge_count = edges.shape[0] * 2 + cells.shape[0] * 3
@@ -825,9 +1100,15 @@ def _fill_open_bisection_numpy(
     parent_edge_index[inner_edge_index[:, 0]] = parent_cell_edges[:, 1]
     parent_edge_index[inner_edge_index[:, 1]] = parent_cell_edges[:, 2]
     parent_edge_index[inner_edge_index[:, 2]] = parent_cell_edges[:, 0]
-    edge_parent_type[inner_edge_index[:, 0]] = gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_0
-    edge_parent_type[inner_edge_index[:, 1]] = gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_1
-    edge_parent_type[inner_edge_index[:, 2]] = gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_2
+    edge_parent_type[inner_edge_index[:, 0]] = (
+        gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_0
+    )
+    edge_parent_type[inner_edge_index[:, 1]] = (
+        gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_1
+    )
+    edge_parent_type[inner_edge_index[:, 2]] = (
+        gg.EDGE_CHILD_TYPE_IN_CELL_OPPOSITE_VERTEX_2
+    )
     return new_cells, new_cell_edges, parent_edge_index, edge_parent_type
 
 
@@ -841,6 +1122,7 @@ def _open_icon_connectivity(
     accelerator: str = "numpy",
 ) -> dict[str, np.ndarray]:
     from . import grid_generator as gg
+
     return gg._icon_connectivity(
         vertices,
         cells,
@@ -972,9 +1254,8 @@ def _boundary_controls(
         0,
     )
     edge_ctrl[:] = side0 + side1
-    transition = (
-        ((side0 == 0) & (side1 > 0) & valid0)
-        | ((side1 == 0) & (side0 > 0) & valid1)
+    transition = ((side0 == 0) & (side1 > 0) & valid0) | (
+        (side1 == 0) & (side0 > 0) & valid1
     )
     edge_ctrl[transition] = 0
     return cell_ctrl, edge_ctrl, vertex_ctrl
@@ -985,9 +1266,7 @@ def _ordered_ids(control: np.ndarray, maximum_ordered_level: int) -> np.ndarray:
         np.flatnonzero(control == level)
         for level in range(1, maximum_ordered_level + 1)
     ]
-    parts.append(
-        np.flatnonzero((control == 0) | (control > maximum_ordered_level))
-    )
+    parts.append(np.flatnonzero((control == 0) | (control > maximum_ordered_level)))
     return np.concatenate(parts).astype(np.int64)
 
 
@@ -1123,9 +1402,9 @@ def _spherical_open_metrics(
     boundary_edges = topology.edge_cells[:, 1] < 0
     if closure == "mirrored":
         fields["dual_edge_length"][boundary_edges] *= 2.0
-        fields["edge_cell_distance"][boundary_edges, 1] = fields[
-            "edge_cell_distance"
-        ][boundary_edges, 0]
+        fields["edge_cell_distance"][boundary_edges, 1] = fields["edge_cell_distance"][
+            boundary_edges, 0
+        ]
         fields["edgequad_area"] = (
             0.5 * fields["edge_length"] * fields["dual_edge_length"]
         )

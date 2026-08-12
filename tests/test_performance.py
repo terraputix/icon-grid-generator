@@ -32,6 +32,14 @@ class PerformanceCase:
     max_best_rss_mib: float
 
 
+@dataclass(frozen=True)
+class FileFamilyPerformanceCase:
+    family: str
+    attempts: int
+    max_best_seconds: float
+    max_best_rss_mib: float
+
+
 def _run_generation_once(case: PerformanceCase) -> dict[str, float | int | str]:
     code = f"""
 import json
@@ -159,6 +167,110 @@ def test_global_generation_performance_regression(case: PerformanceCase):
     if case.workflow == "streamed":
         pytest.importorskip("netCDF4")
     best, results = _best_of(case)
+
+    assert best["seconds"] <= case.max_best_seconds, results
+    assert best["rss_mib"] <= case.max_best_rss_mib, results
+
+
+def _run_file_family_once(
+    case: FileFamilyPerformanceCase,
+) -> dict[str, float | str]:
+    code = f"""
+import json
+import resource
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+
+from grid_generator import (
+    LimitedAreaGridSpec,
+    ParallelogramGridSpec,
+    Region,
+    generate_grid_to_netcdf,
+)
+from grid_generator import _streaming
+
+scratch_root = Path.cwd() / "profiling"
+scratch_root.mkdir(parents=True, exist_ok=True)
+with TemporaryDirectory(dir=scratch_root) as directory:
+    if {case.family!r} == "planar":
+        spec = ParallelogramGridSpec(
+            nx=300,
+            ny=200,
+            edge_length=1.0,
+            shear=0.2,
+        )
+        options = {{}}
+    else:
+        _streaming.DEFAULT_IN_MEMORY_BASE_CELLS = 1_280
+        spec = LimitedAreaGridSpec(
+            parent="R01B08",
+            region=Region.circle(
+                lon=0.0,
+                lat=0.0,
+                radius_degrees=12.0,
+            ),
+            local_optimization_iterations=0,
+        )
+        options = {{
+            "max_cells": None,
+            "accelerator": "numba",
+            "optimize_global": False,
+        }}
+    start = time.perf_counter()
+    generate_grid_to_netcdf(
+        spec,
+        Path(directory) / "grid.nc",
+        options=options,
+        work_dir=Path(directory) / "work",
+        fields="icon4py",
+        chunk_size=1_000,
+    )
+    elapsed = time.perf_counter() - start
+rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+rss_mib = rss / 1024 if sys.platform.startswith("linux") else rss / (1024 * 1024)
+print(json.dumps({{
+    "family": {case.family!r},
+    "seconds": elapsed,
+    "rss_mib": rss_mib,
+}}))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONHASHSEED": "0"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        FileFamilyPerformanceCase(
+            family="planar",
+            attempts=2,
+            max_best_seconds=5.0,
+            max_best_rss_mib=400.0,
+        ),
+        FileFamilyPerformanceCase(
+            family="limited-area",
+            attempts=2,
+            max_best_seconds=20.0,
+            max_best_rss_mib=800.0,
+        ),
+    ],
+    ids=lambda case: case.family,
+)
+def test_file_oriented_family_memory_regression(case: FileFamilyPerformanceCase):
+    pytest.importorskip("netCDF4")
+    if case.family == "limited-area":
+        pytest.importorskip("numba")
+    results = [_run_file_family_once(case) for _ in range(case.attempts)]
+    best = min(results, key=lambda row: float(row["seconds"]))
 
     assert best["seconds"] <= case.max_best_seconds, results
     assert best["rss_mib"] <= case.max_best_rss_mib, results

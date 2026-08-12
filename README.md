@@ -13,8 +13,9 @@ Pure Python generation of deterministic ICON-style triangular grids.
 The package provides spherical `R<n>B<k>` grids, planar triangular grids,
 limited-area extraction, geometry diagnostics and transforms, xarray conversion,
 and ICON-compatible NetCDF export. The same file-oriented API handles every grid
-family; large global grids automatically use bounded derived-field memory and
-resumable disk checkpoints.
+family. File-oriented generation computes NetCDF-only fields in bounded chunks;
+large global grids and large global construction parents for limited-area grids
+also use compact staged generation and resumable disk checkpoints.
 
 ## Installation
 
@@ -81,8 +82,8 @@ generate_grid_to_netcdf(
 )
 ```
 
-The same call automatically selects the export-first implementation for a large
-global grid:
+The same call automatically selects compact checkpoint stages for a large
+global grid, or for the global parent of a limited-area request:
 
 ```py
 from grid_generator import generate_grid_to_netcdf
@@ -97,9 +98,15 @@ generate_grid_to_netcdf(
 )
 ```
 
-Checkpointed, bounded-memory generation is currently specific to global grids;
-other grid families use their normal in-memory generator before writing. `R2B8`
-is a practical first large-grid example at about 9.86 km resolution; check the
+All grid types use the same validated, chunked, atomic file-publication path.
+Global grids and limited-area construction parents add resumable bisection
+checkpoints when they exceed the in-memory base-stage budget. Regional
+selection is evaluated in chunks directly against that compact parent, so a
+LAM based on R2B12 no longer requires a complete global R2B11/R2B12
+`IconGrid`; only the selected regional result is materialized. Planar grids
+have no multilevel refinement stages to checkpoint, and use preallocated array
+builders that avoid per-cell and per-edge Python object graphs. `R2B8` is a
+practical first large-grid example at about 9.86 km resolution; check the
 resource tables before requesting finer grids.
 
 The default `full` profile contains 88 fields, including the established

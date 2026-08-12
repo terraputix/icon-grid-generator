@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from datetime import datetime
 import getpass
+import os
 from pathlib import Path
 import platform
 from typing import Any
@@ -13,8 +14,8 @@ import numpy as np
 
 from ._grid_semantics import is_icon_open_boundary, is_planar_geometry
 
-IconNetcdfField = tuple[str, tuple[str, ...], Any, dict[str, Any]]
 IconNetcdfFieldSelection = str | Iterable[str]
+DEFAULT_NETCDF_CHUNK_SIZE = 1_000_000
 
 ICON_NETCDF_FIELD_NAMES = (
     "clon",
@@ -194,12 +195,16 @@ def resolve_icon_netcdf_fields(
     if isinstance(fields, str):
         if fields not in ICON_NETCDF_FIELD_PROFILES:
             choices = ", ".join(sorted(ICON_NETCDF_FIELD_PROFILES))
-            raise ValueError(f"unknown NetCDF field profile {fields!r}; choose {choices}")
+            raise ValueError(
+                f"unknown NetCDF field profile {fields!r}; choose {choices}"
+            )
         return ICON_NETCDF_FIELD_PROFILES[fields]
     try:
         selected = frozenset(fields)
     except TypeError as exc:
-        raise TypeError("fields must be a profile name or an iterable of field names") from exc
+        raise TypeError(
+            "fields must be a profile name or an iterable of field names"
+        ) from exc
     if any(not isinstance(name, str) for name in selected):
         raise TypeError("every NetCDF field name must be a string")
     unknown = selected.difference(ICON_NETCDF_FIELD_NAMES)
@@ -207,6 +212,8 @@ def resolve_icon_netcdf_fields(
         names = ", ".join(sorted(unknown))
         raise ValueError(f"unknown NetCDF field name(s): {names}")
     return selected
+
+
 CELL_COORD_ATTRS = {
     "coordinates": "clon clat",
     "grid_type": "unstructured",
@@ -249,7 +256,10 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
     "lat_cell_centre": {**CELL_COORD_ATTRS, "long_name": "latitude of cell centre"},
     "longitude_vertices": {**VERTEX_COORD_ATTRS, "long_name": "longitude of vertices"},
     "latitude_vertices": {**VERTEX_COORD_ATTRS, "long_name": "latitude of vertices"},
-    "lon_edge_centre": {**EDGE_COORD_ATTRS, "long_name": "longitudes of edge midpoints"},
+    "lon_edge_centre": {
+        **EDGE_COORD_ATTRS,
+        "long_name": "longitudes of edge midpoints",
+    },
     "lat_edge_centre": {**EDGE_COORD_ATTRS, "long_name": "latitudes of edge midpoints"},
     "edge_of_cell": {"long_name": "edges of each cell"},
     "vertex_of_cell": {"long_name": "vertices of each cell"},
@@ -271,7 +281,10 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
     },
     "cell_area_p": {**CELL_COORD_ATTRS, "long_name": "area of grid cell"},
     "dual_area_p": {"long_name": "areas of dual hexagonal/pentagonal cells"},
-    "edge_length": {**EDGE_COORD_ATTRS, "long_name": "lengths of edges of triangular cells"},
+    "edge_length": {
+        **EDGE_COORD_ATTRS,
+        "long_name": "lengths of edges of triangular cells",
+    },
     "dual_edge_length": {
         **EDGE_COORD_ATTRS,
         "long_name": "lengths of dual edges (distances between triangular cell circumcenters)",
@@ -292,20 +305,43 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
     },
     "vlon_vertices": {"long_name": "vertex-neighbor longitude bounds"},
     "vlat_vertices": {"long_name": "vertex-neighbor latitude bounds"},
-    "orientation_of_normal": {"long_name": "orientations of normals to triangular cell edges"},
-    "edge_system_orientation": {**EDGE_COORD_ATTRS, "long_name": "edge system orientation"},
+    "orientation_of_normal": {
+        "long_name": "orientations of normals to triangular cell edges"
+    },
+    "edge_system_orientation": {
+        **EDGE_COORD_ATTRS,
+        "long_name": "edge system orientation",
+    },
     "edge_orientation": {"long_name": "edge orientation"},
     "refin_c_ctrl": {"long_name": "refinement control flag for cells"},
     "refin_e_ctrl": {"long_name": "refinement control flag for edges"},
     "refin_v_ctrl": {"long_name": "refinement control flag for vertices"},
-    "start_idx_c": {"long_name": "list of start indices for each refinement control level for cells"},
-    "end_idx_c": {"long_name": "list of end indices for each refinement control level for cells"},
-    "start_idx_e": {"long_name": "list of start indices for each refinement control level for edges"},
-    "end_idx_e": {"long_name": "list of end indices for each refinement control level for edges"},
-    "start_idx_v": {"long_name": "list of start indices for each refinement control level for vertices"},
-    "end_idx_v": {"long_name": "list of end indices for each refinement control level for vertices"},
-    "cell_elevation": {**CELL_COORD_ATTRS, "long_name": "elevation at the cell centers"},
-    "edge_elevation": {**EDGE_COORD_ATTRS, "long_name": "elevation at the edge centers"},
+    "start_idx_c": {
+        "long_name": "list of start indices for each refinement control level for cells"
+    },
+    "end_idx_c": {
+        "long_name": "list of end indices for each refinement control level for cells"
+    },
+    "start_idx_e": {
+        "long_name": "list of start indices for each refinement control level for edges"
+    },
+    "end_idx_e": {
+        "long_name": "list of end indices for each refinement control level for edges"
+    },
+    "start_idx_v": {
+        "long_name": "list of start indices for each refinement control level for vertices"
+    },
+    "end_idx_v": {
+        "long_name": "list of end indices for each refinement control level for vertices"
+    },
+    "cell_elevation": {
+        **CELL_COORD_ATTRS,
+        "long_name": "elevation at the cell centers",
+    },
+    "edge_elevation": {
+        **EDGE_COORD_ATTRS,
+        "long_name": "elevation at the edge centers",
+    },
     "cell_sea_land_mask": {
         **CELL_COORD_ATTRS,
         "long_name": "sea (-2 inner, -1 boundary) land (2 inner, 1 boundary) mask for the cell",
@@ -393,7 +429,9 @@ ICON_VARIABLE_ATTRS: dict[str, dict[str, Any]] = {
         **EDGE_COORD_ATTRS,
         "long_name": "unit normal to the dual edge 3D vector, coordinate z",
     },
-    "zonal_normal_primal_edge": {"long_name": "zonal component of normal to primal edge"},
+    "zonal_normal_primal_edge": {
+        "long_name": "zonal component of normal to primal edge"
+    },
     "meridional_normal_primal_edge": {
         "long_name": "meridional component of normal to primal edge",
     },
@@ -566,8 +604,9 @@ def write_icon_grid(
     *,
     sphere_radius: float | None = None,
     fields: IconNetcdfFieldSelection = "full",
+    chunk_size: int | None = None,
 ) -> Path:
-    """Write selected fields from an ICON-style NetCDF grid schema."""
+    """Write selected fields from an ICON-style NetCDF grid schema atomically."""
     selected_fields = resolve_icon_netcdf_fields(fields)
     _require_complete_icon_grid(grid)
     if sphere_radius is None:
@@ -585,20 +624,265 @@ def write_icon_grid(
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if chunk_size is not None and (
+        not isinstance(chunk_size, int)
+        or isinstance(chunk_size, bool)
+        or chunk_size <= 0
+    ):
+        raise ValueError("chunk_size must be a positive integer")
+    partial = path.with_name(f"{path.name}.partial")
+    if partial.exists():
+        partial.unlink()
 
-    with nc.Dataset(path, "w", format="NETCDF4") as dataset:
+    with nc.Dataset(partial, "w", format="NETCDF4") as dataset:
         _write_icon_dimensions(dataset, grid)
         _write_icon_attributes(dataset, grid, path)
-        for name, dims, data, attrs in _icon_fields(grid, selected_fields):
-            variable = dataset.createVariable(name, np.asarray(data).dtype, dims)
-            variable[:] = data
-            for attr_name, attr_value in attrs.items():
-                variable.setncattr(attr_name, attr_value)
-            # Release generated field storage before advancing the iterator;
-            # the next field can itself be an edge-by-four bounds array.
-            del data
+        _write_icon_fields_chunked(
+            dataset,
+            grid,
+            selected_fields,
+            DEFAULT_NETCDF_CHUNK_SIZE if chunk_size is None else chunk_size,
+        )
+    # Lightweight test doubles may not create a physical file. Real netCDF4
+    # datasets always do, and are published through one atomic replacement.
+    if partial.exists():
+        os.replace(partial, path)
 
     return path
+
+
+def _write_icon_fields_chunked(
+    dataset: Any,
+    grid: Any,
+    selected_fields: frozenset[str],
+    chunk_size: int,
+) -> None:
+    """Create and fill established fields without full export-only arrays."""
+    for name, dimensions, dtype, base_attrs in _icon_variable_definitions():
+        if name not in selected_fields:
+            continue
+        attrs = dict(base_attrs)
+        if name == "edgequad_area" and is_planar_geometry(grid.metadata):
+            attrs = {"units": "m2"}
+        attrs = _with_icon_variable_attrs(name, attrs, selected_fields)
+        variable = dataset.createVariable(name, dtype, dimensions)
+        for attr_name, attr_value in attrs.items():
+            variable.setncattr(attr_name, attr_value)
+
+        entity_axis = next(
+            (
+                axis
+                for axis, dimension in enumerate(dimensions)
+                if dimension in {"cell", "edge", "vertex"}
+            ),
+            None,
+        )
+        if entity_axis is None:
+            variable[:] = _fixed_icon_field(grid, name)
+            continue
+        dimension = dimensions[entity_axis]
+        size = grid.dims[dimension]
+        for start in range(0, size, chunk_size):
+            section = slice(start, min(start + chunk_size, size))
+            target = [slice(None)] * len(dimensions)
+            target[entity_axis] = section
+            variable[tuple(target)] = _icon_field_chunk(grid, name, section)
+
+
+def _fixed_icon_field(grid: Any, name: str) -> np.ndarray:
+    if name in grid.refinement:
+        return np.asarray(grid.refinement[name])
+    raise RuntimeError(f"chunked NetCDF writer has no fixed field builder for {name}")
+
+
+def _icon_field_chunk(grid: Any, name: str, section: slice) -> np.ndarray:
+    """Build one entity slice for the canonical ICON schema."""
+    for builder in (
+        _coordinate_field_chunk,
+        _connectivity_field_chunk,
+        _metric_field_chunk,
+        _surface_refinement_field_chunk,
+        _cartesian_field_chunk,
+        _normal_hierarchy_field_chunk,
+    ):
+        values = builder(grid, name, section)
+        if values is not None:
+            return values
+    raise RuntimeError(f"chunked NetCDF writer has no field builder for {name}")
+
+
+def _coordinate_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    coordinate_source = {
+        "clon": grid.lon,
+        "clat": grid.lat,
+        "lon_cell_centre": grid.lon,
+        "lat_cell_centre": grid.lat,
+        "vlon": grid.vertex_lon,
+        "vlat": grid.vertex_lat,
+        "longitude_vertices": grid.vertex_lon,
+        "latitude_vertices": grid.vertex_lat,
+        "elon": grid.edge_lon,
+        "elat": grid.edge_lat,
+        "lon_edge_centre": grid.edge_lon,
+        "lat_edge_centre": grid.edge_lat,
+    }
+    if name in coordinate_source:
+        return np.radians(coordinate_source[name][section])
+    if name == "clon_vertices":
+        return np.radians(grid.vertex_lon[grid.cells[section]])
+    if name == "clat_vertices":
+        return np.radians(grid.vertex_lat[grid.cells[section]])
+    if name == "elon_vertices":
+        return _edge_coordinate_bounds(grid, "lon", section=section)
+    if name == "elat_vertices":
+        return _edge_coordinate_bounds(grid, "lat", section=section)
+    return None
+
+
+def _connectivity_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    open_grid = is_icon_open_boundary(grid.metadata)
+    if name == "edge_of_cell":
+        return grid.icon_connectivity["c2e"][section].T + 1
+    if name == "vertex_of_cell":
+        return grid.cells[section].T + 1
+    if name == "neighbor_cell_index":
+        values = grid.icon_connectivity["c2c"][section]
+        return (np.where(values < 0, -1, values + 1) if open_grid else values + 1).T
+    if name == "adjacent_cell_of_edge":
+        values = grid.edge_cells[section]
+        return (np.where(values < 0, -1, values + 1) if open_grid else values + 1).T
+    if name == "edge_vertices":
+        return grid.edges[section].T + 1
+    connectivity_names = {
+        "cells_of_vertex": "v2c",
+        "edges_of_vertex": "v2e",
+        "vertices_of_vertex": "v2v",
+    }
+    if name in connectivity_names:
+        values = grid.icon_connectivity[connectivity_names[name]][section]
+        if open_grid:
+            values = np.where(values == 0, -1, values)
+        return values.T
+    return None
+
+
+def _metric_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    geometry_names = {
+        "cell_area": "cell_area",
+        "cell_area_p": "cell_area",
+        "dual_area": "dual_area",
+        "dual_area_p": "dual_area",
+        "edge_length": "edge_length",
+        "dual_edge_length": "dual_edge_length",
+        "edge_system_orientation": "edge_system_orientation",
+    }
+    if name in geometry_names:
+        return np.asarray(grid.geometry[geometry_names[name]][section])
+    if name == "edge_cell_distance":
+        return grid.geometry[name][section].T
+    if name == "edge_vert_distance":
+        return grid.geometry[name][section].T
+    if name == "edgequad_area":
+        values = grid.geometry[name][section]
+        return values if is_planar_geometry(grid.metadata) else values / grid.options.sphere_radius**2
+    if name == "orientation_of_normal":
+        return grid.geometry[name][section].T
+    if name == "edge_orientation":
+        return grid.geometry[name][section].T
+    return None
+
+
+def _surface_refinement_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    if name in grid.refinement:
+        return np.asarray(grid.refinement[name][section])
+    if name in {"cell_elevation", "edge_elevation", "quadrilateral_area"}:
+        return np.zeros(section.stop - (section.start or 0), dtype=np.float64)
+    if name in {"cell_sea_land_mask", "edge_sea_land_mask"}:
+        return np.zeros(section.stop - (section.start or 0), dtype=np.int32)
+    return None
+
+
+def _cartesian_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    cartesian_sources = {
+        "cartesian_x_vertices": (grid.vertices, 0),
+        "cartesian_y_vertices": (grid.vertices, 1),
+        "cartesian_z_vertices": (grid.vertices, 2),
+        "cell_circumcenter_cartesian_x": (grid.cell_center_xyz, 0),
+        "cell_circumcenter_cartesian_y": (grid.cell_center_xyz, 1),
+        "cell_circumcenter_cartesian_z": (grid.cell_center_xyz, 2),
+        "edge_middle_cartesian_x": (grid.edge_center_xyz, 0),
+        "edge_middle_cartesian_y": (grid.edge_center_xyz, 1),
+        "edge_middle_cartesian_z": (grid.edge_center_xyz, 2),
+        "edge_dual_middle_cartesian_x": (grid.edge_center_xyz, 0),
+        "edge_dual_middle_cartesian_y": (grid.edge_center_xyz, 1),
+        "edge_dual_middle_cartesian_z": (grid.edge_center_xyz, 2),
+    }
+    if name in cartesian_sources:
+        source, component = cartesian_sources[name]
+        values = np.asarray(source[section])
+        if not is_planar_geometry(grid.metadata):
+            values = _gg()._normalize_rows(values)
+        return values[:, component]
+    if name in {"phys_cell_id", "cell_index", "phys_edge_id", "edge_index", "vertex_index"}:
+        return np.arange((section.start or 0) + 1, section.stop + 1, dtype=np.int32)
+    return None
+
+
+def _normal_hierarchy_field_chunk(
+    grid: Any,
+    name: str,
+    section: slice,
+) -> np.ndarray | None:
+    normal_components = {
+        "edge_primal_normal_cartesian_x": ("edge_primal_normal_cartesian", 0),
+        "edge_primal_normal_cartesian_y": ("edge_primal_normal_cartesian", 1),
+        "edge_primal_normal_cartesian_z": ("edge_primal_normal_cartesian", 2),
+        "edge_dual_normal_cartesian_x": ("edge_dual_normal_cartesian", 0),
+        "edge_dual_normal_cartesian_y": ("edge_dual_normal_cartesian", 1),
+        "edge_dual_normal_cartesian_z": ("edge_dual_normal_cartesian", 2),
+    }
+    if name in normal_components:
+        source, component = normal_components[name]
+        return grid.geometry[source][section, component]
+    if name in {
+        "zonal_normal_primal_edge",
+        "meridional_normal_primal_edge",
+        "zonal_normal_dual_edge",
+        "meridional_normal_dual_edge",
+    }:
+        return grid.geometry[name][section]
+
+    if name in {"child_cell_index", "child_edge_index"}:
+        return np.zeros((4, section.stop - (section.start or 0)), dtype=np.int32)
+    if name in {"child_cell_id", "child_edge_id"}:
+        return np.zeros(section.stop - (section.start or 0), dtype=np.int32)
+    if name in {"vlon_vertices", "vlat_vertices"}:
+        neighbors = np.asarray(grid.icon_connectivity["v2v"][section])
+        valid = neighbors > 0
+        indices = np.maximum(neighbors - 1, 0)
+        coordinates = grid.vertex_lon if name == "vlon_vertices" else grid.vertex_lat
+        return np.where(valid, np.radians(coordinates[indices]), 0.0)
+    return None
 
 
 def _require_complete_icon_grid(grid: Any) -> None:
@@ -715,327 +999,6 @@ def _write_icon_attributes(dataset: Any, grid: Any, path: Path) -> None:
         dataset.setncattr(name, value)
 
 
-def _icon_fields(
-    grid: Any,
-    selected_fields: frozenset[str] | None = None,
-) -> Iterator[IconNetcdfField]:
-    """Yield field groups incrementally to bound export-time memory."""
-    if selected_fields is None:
-        selected_fields = ICON_NETCDF_FIELD_PROFILES["full"]
-    builders = (
-        (
-            lambda: _coordinate_fields(grid, selected_fields),
-            frozenset(ICON_NETCDF_FIELD_NAMES[0:16]),
-        ),
-        (
-            lambda: _connectivity_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[16:24]),
-        ),
-        (
-            lambda: _metric_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[24:36]),
-        ),
-        (
-            lambda: _refinement_fields_for_netcdf(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[36:45]),
-        ),
-        (
-            lambda: _static_surface_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[45:49]),
-        ),
-        (
-            lambda: _cartesian_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[49:66]),
-        ),
-        (
-            lambda: _normal_vector_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[66:76]),
-        ),
-        (
-            lambda: _hierarchy_fields(grid, selected_fields),
-            frozenset(ICON_NETCDF_FIELD_NAMES[76:85]),
-        ),
-        (
-            lambda: _legacy_grid_description_fields(grid),
-            frozenset(ICON_NETCDF_FIELD_NAMES[85:88]),
-        ),
-    )
-    for build, group in builders:
-        if group.isdisjoint(selected_fields):
-            continue
-        for name, dims, data, attrs in build():
-            if name in selected_fields:
-                yield name, dims, data, _with_icon_variable_attrs(
-                    name,
-                    attrs,
-                    selected_fields,
-                )
-
-
-def _coordinate_fields(
-    grid: Any,
-    selected_fields: frozenset[str] | None = None,
-) -> Iterator[IconNetcdfField]:
-    if selected_fields is None:
-        selected_fields = ICON_NETCDF_FIELD_PROFILES["full"]
-    attrs = {"units": "radian"}
-    yield "clon", ("cell",), np.radians(grid.lon), attrs
-    yield "clat", ("cell",), np.radians(grid.lat), attrs
-    if "clon_vertices" in selected_fields:
-        yield "clon_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lon), attrs
-    if "clat_vertices" in selected_fields:
-        yield "clat_vertices", ("cell", "nv"), np.radians(grid.cell_vertex_lat), attrs
-    yield "vlon", ("vertex",), np.radians(grid.vertex_lon), attrs
-    yield "vlat", ("vertex",), np.radians(grid.vertex_lat), attrs
-    yield "elon", ("edge",), np.radians(grid.edge_lon), attrs
-    yield "elat", ("edge",), np.radians(grid.edge_lat), attrs
-    if "elon_vertices" in selected_fields:
-        yield "elon_vertices", ("edge", "no"), _edge_coordinate_bounds(grid, "lon"), attrs
-    if "elat_vertices" in selected_fields:
-        yield "elat_vertices", ("edge", "no"), _edge_coordinate_bounds(grid, "lat"), attrs
-    yield "lon_cell_centre", ("cell",), np.radians(grid.lon), attrs
-    yield "lat_cell_centre", ("cell",), np.radians(grid.lat), attrs
-    yield "longitude_vertices", ("vertex",), np.radians(grid.vertex_lon), attrs
-    yield "latitude_vertices", ("vertex",), np.radians(grid.vertex_lat), attrs
-    yield "lon_edge_centre", ("edge",), np.radians(grid.edge_lon), attrs
-    yield "lat_edge_centre", ("edge",), np.radians(grid.edge_lat), attrs
-
-
-def _connectivity_fields(grid: Any) -> Iterator[IconNetcdfField]:
-    connectivity = grid.icon_connectivity
-    yield "edge_of_cell", ("nv", "cell"), connectivity["c2e"].T + 1, {}
-    yield "vertex_of_cell", ("nv", "cell"), grid.cells.T + 1, {}
-    open_grid = is_icon_open_boundary(grid.metadata)
-    neighbor = (
-        np.where(connectivity["c2c"] < 0, -1, connectivity["c2c"] + 1)
-        if open_grid
-        else connectivity["c2c"] + 1
-    )
-    adjacent = (
-        np.where(grid.edge_cells < 0, -1, grid.edge_cells + 1)
-        if open_grid
-        else grid.edge_cells + 1
-    )
-    yield "neighbor_cell_index", ("nv", "cell"), neighbor.T, {}
-    yield "adjacent_cell_of_edge", ("nc", "edge"), adjacent.T, {}
-    yield "edge_vertices", ("nc", "edge"), grid.edges.T + 1, {}
-    for name, key in (
-        ("cells_of_vertex", "v2c"),
-        ("edges_of_vertex", "v2e"),
-        ("vertices_of_vertex", "v2v"),
-    ):
-        values = connectivity[key]
-        if open_grid:
-            values = np.where(values == 0, -1, values)
-        yield name, ("ne", "vertex"), values.T, {}
-
-
-def _legacy_grid_description_fields(grid: Any) -> Iterator[IconNetcdfField]:
-    """Emit established grid-description fields retained for compatibility."""
-    yield "quadrilateral_area", ("edge",), np.zeros(grid.dims["edge"]), {}
-    neighbors = np.asarray(grid.icon_connectivity["v2v"])
-    valid = neighbors > 0
-    indices = np.maximum(neighbors - 1, 0)
-    yield "vlon_vertices", ("vertex", "ne"), np.where(
-        valid,
-        np.radians(grid.vertex_lon[indices]),
-        0.0,
-    ), {"units": "radian"}
-    yield "vlat_vertices", ("vertex", "ne"), np.where(
-        valid,
-        np.radians(grid.vertex_lat[indices]),
-        0.0,
-    ), {"units": "radian"}
-
-
-def _metric_fields(grid: Any) -> list[IconNetcdfField]:
-    geometry = grid.geometry
-    is_planar = is_planar_geometry(grid.metadata)
-    edgequad_normalizer = 1.0 if is_planar else grid.options.sphere_radius**2
-    edgequad_attrs = (
-        {"units": "m2"}
-        if is_planar
-        else {
-            "units": "1",
-            "normalization": "physical edge quadrilateral area divided by sphere_radius squared",
-        }
-    )
-    return [
-        ("cell_area", ("cell",), geometry["cell_area"], {"units": "m2"}),
-        ("dual_area", ("vertex",), geometry["dual_area"], {"units": "m2"}),
-        ("cell_area_p", ("cell",), geometry["cell_area"], {"units": "m2"}),
-        ("dual_area_p", ("vertex",), geometry["dual_area"], {"units": "m2"}),
-        ("edge_length", ("edge",), geometry["edge_length"], {"units": "m"}),
-        ("dual_edge_length", ("edge",), geometry["dual_edge_length"], {"units": "m"}),
-        ("edge_cell_distance", ("nc", "edge"), geometry["edge_cell_distance"].T, {"units": "m"}),
-        ("edge_vert_distance", ("nc", "edge"), geometry["edge_vert_distance"].T, {"units": "m"}),
-        (
-            "edgequad_area",
-            ("edge",),
-            geometry["edgequad_area"] / edgequad_normalizer,
-            edgequad_attrs,
-        ),
-        ("orientation_of_normal", ("nv", "cell"), geometry["orientation_of_normal"].T, {}),
-        ("edge_system_orientation", ("edge",), geometry["edge_system_orientation"], {}),
-        ("edge_orientation", ("ne", "vertex"), geometry["edge_orientation"].T, {}),
-    ]
-
-
-def _refinement_fields_for_netcdf(grid: Any) -> list[IconNetcdfField]:
-    refinement = grid.refinement
-    return [
-        ("refin_c_ctrl", ("cell",), refinement["refin_c_ctrl"], {}),
-        ("refin_e_ctrl", ("edge",), refinement["refin_e_ctrl"], {}),
-        ("refin_v_ctrl", ("vertex",), refinement["refin_v_ctrl"], {}),
-        ("start_idx_c", ("max_chdom", "cell_grf"), refinement["start_idx_c"], {}),
-        ("end_idx_c", ("max_chdom", "cell_grf"), refinement["end_idx_c"], {}),
-        ("start_idx_e", ("max_chdom", "edge_grf"), refinement["start_idx_e"], {}),
-        ("end_idx_e", ("max_chdom", "edge_grf"), refinement["end_idx_e"], {}),
-        ("start_idx_v", ("max_chdom", "vert_grf"), refinement["start_idx_v"], {}),
-        ("end_idx_v", ("max_chdom", "vert_grf"), refinement["end_idx_v"], {}),
-    ]
-
-
-def _static_surface_fields(grid: Any) -> Iterator[IconNetcdfField]:
-    yield "cell_elevation", ("cell",), np.zeros(grid.dims["cell"]), {"units": "m"}
-    yield "edge_elevation", ("edge",), np.zeros(grid.dims["edge"]), {"units": "m"}
-    yield "cell_sea_land_mask", ("cell",), np.zeros(grid.dims["cell"], dtype=np.int32), {}
-    yield "edge_sea_land_mask", ("edge",), np.zeros(grid.dims["edge"], dtype=np.int32), {}
-
-
-def _cartesian_fields(grid: Any) -> Iterator[IconNetcdfField]:
-    if is_planar_geometry(grid.metadata):
-        unit_vertices = grid.vertices
-    else:
-        unit_vertices = _gg()._normalize_rows(grid.vertices)
-    attrs = {"units": "meters"}
-    yield "cartesian_x_vertices", ("vertex",), unit_vertices[:, 0], attrs
-    yield "cartesian_y_vertices", ("vertex",), unit_vertices[:, 1], attrs
-    yield "cartesian_z_vertices", ("vertex",), unit_vertices[:, 2], attrs
-    del unit_vertices
-
-    unit_centers = (
-        grid.cell_center_xyz
-        if is_planar_geometry(grid.metadata)
-        else _gg()._normalize_rows(grid.cell_center_xyz)
-    )
-    yield "cell_circumcenter_cartesian_x", ("cell",), unit_centers[:, 0], attrs
-    yield "cell_circumcenter_cartesian_y", ("cell",), unit_centers[:, 1], attrs
-    yield "cell_circumcenter_cartesian_z", ("cell",), unit_centers[:, 2], attrs
-    del unit_centers
-
-    unit_edge_centers = (
-        grid.edge_center_xyz
-        if is_planar_geometry(grid.metadata)
-        else _gg()._normalize_rows(grid.edge_center_xyz)
-    )
-    yield "edge_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], attrs
-    yield "edge_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], attrs
-    yield "edge_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], attrs
-    yield "phys_cell_id", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}
-    yield "phys_edge_id", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}
-    yield "cell_index", ("cell",), np.arange(1, grid.dims["cell"] + 1, dtype=np.int32), {}
-    yield "edge_index", ("edge",), np.arange(1, grid.dims["edge"] + 1, dtype=np.int32), {}
-    yield "vertex_index", ("vertex",), np.arange(1, grid.dims["vertex"] + 1, dtype=np.int32), {}
-    yield "edge_dual_middle_cartesian_x", ("edge",), unit_edge_centers[:, 0], attrs
-    yield "edge_dual_middle_cartesian_y", ("edge",), unit_edge_centers[:, 1], attrs
-    yield "edge_dual_middle_cartesian_z", ("edge",), unit_edge_centers[:, 2], attrs
-
-
-def _normal_vector_fields(grid: Any) -> list[IconNetcdfField]:
-    geometry = grid.geometry
-    return [
-        (
-            "edge_primal_normal_cartesian_x",
-            ("edge",),
-            geometry["edge_primal_normal_cartesian"][:, 0],
-            {"units": "meters"},
-        ),
-        (
-            "edge_primal_normal_cartesian_y",
-            ("edge",),
-            geometry["edge_primal_normal_cartesian"][:, 1],
-            {"units": "meters"},
-        ),
-        (
-            "edge_primal_normal_cartesian_z",
-            ("edge",),
-            geometry["edge_primal_normal_cartesian"][:, 2],
-            {"units": "meters"},
-        ),
-        (
-            "edge_dual_normal_cartesian_x",
-            ("edge",),
-            geometry["edge_dual_normal_cartesian"][:, 0],
-            {"units": "meters"},
-        ),
-        (
-            "edge_dual_normal_cartesian_y",
-            ("edge",),
-            geometry["edge_dual_normal_cartesian"][:, 1],
-            {"units": "meters"},
-        ),
-        (
-            "edge_dual_normal_cartesian_z",
-            ("edge",),
-            geometry["edge_dual_normal_cartesian"][:, 2],
-            {"units": "meters"},
-        ),
-        ("zonal_normal_primal_edge", ("edge",), geometry["zonal_normal_primal_edge"], {"units": "radian"}),
-        (
-            "meridional_normal_primal_edge",
-            ("edge",),
-            geometry["meridional_normal_primal_edge"],
-            {"units": "radian"},
-        ),
-        ("zonal_normal_dual_edge", ("edge",), geometry["zonal_normal_dual_edge"], {"units": "radian"}),
-        (
-            "meridional_normal_dual_edge",
-            ("edge",),
-            geometry["meridional_normal_dual_edge"],
-            {"units": "radian"},
-        ),
-    ]
-
-
-def _hierarchy_fields(
-    grid: Any,
-    selected_fields: frozenset[str] | None = None,
-) -> Iterator[IconNetcdfField]:
-    if selected_fields is None:
-        selected_fields = ICON_NETCDF_FIELD_PROFILES["full"]
-    refinement = grid.refinement
-    for name, dimension in (
-        ("parent_cell_index", "cell"),
-        ("parent_cell_type", "cell"),
-        ("edge_parent_type", "edge"),
-        ("parent_edge_index", "edge"),
-        ("parent_vertex_index", "vertex"),
-    ):
-        if name in selected_fields:
-            yield name, (dimension,), refinement[name], {}
-    if "child_cell_index" in selected_fields:
-        yield "child_cell_index", ("no", "cell"), np.zeros(
-            (4, grid.dims["cell"]),
-            dtype=np.int32,
-        ), {}
-    if "child_cell_id" in selected_fields:
-        yield "child_cell_id", ("cell",), np.zeros(
-            grid.dims["cell"],
-            dtype=np.int32,
-        ), {}
-    if "child_edge_index" in selected_fields:
-        yield "child_edge_index", ("no", "edge"), np.zeros(
-            (4, grid.dims["edge"]),
-            dtype=np.int32,
-        ), {}
-    if "child_edge_id" in selected_fields:
-        yield "child_edge_id", ("edge",), np.zeros(
-            grid.dims["edge"],
-            dtype=np.int32,
-        ), {}
-
-
 def _with_icon_variable_attrs(
     name: str,
     attrs: dict[str, Any],
@@ -1061,23 +1024,19 @@ def _with_icon_variable_attrs(
     return merged
 
 
-def _edge_lon_lat_bounds(grid: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Return ICON-style four-point edge bounds in radians.
-
-    The upstream grid generator stores bounds for each edge as a quadrilateral:
-    first edge vertex, second adjacent cell center, second edge vertex, first
-    adjacent cell center.
-    """
-    return _edge_coordinate_bounds(grid, "lon"), _edge_coordinate_bounds(grid, "lat")
-
-
-def _edge_coordinate_bounds(grid: Any, coordinate: str) -> np.ndarray:
-    edge_vertices = np.asarray(grid.edges, dtype=np.int32)
-    edge_cells = np.asarray(grid.edge_cells, dtype=np.int32)
+def _edge_coordinate_bounds(
+    grid: Any,
+    coordinate: str,
+    *,
+    section: slice = slice(None),
+) -> np.ndarray:
+    edge_vertices = np.asarray(grid.edges[section], dtype=np.int32)
+    edge_cells = np.asarray(grid.edge_cells[section], dtype=np.int32)
     vertex_values = grid.vertex_lon if coordinate == "lon" else grid.vertex_lat
     cell_values = grid.lon if coordinate == "lon" else grid.lat
-    edge_values = grid.edge_lon if coordinate == "lon" else grid.edge_lat
-    values = np.empty((grid.dims["edge"], 4), dtype=np.float64)
+    all_edge_values = grid.edge_lon if coordinate == "lon" else grid.edge_lat
+    edge_values = all_edge_values[section]
+    values = np.empty((edge_vertices.shape[0], 4), dtype=np.float64)
     values[:, 0] = vertex_values[edge_vertices[:, 0]]
     second_cell = edge_cells[:, 1]
     values[:, 1] = np.where(
@@ -1103,7 +1062,7 @@ def _edge_coordinate_bounds(grid: Any, coordinate: str) -> np.ndarray:
                 np.where(
                     second_cell >= 0,
                     grid.lat[np.maximum(second_cell, 0)],
-                    grid.edge_lat,
+                    grid.edge_lat[section],
                 )
             ),
             90.0,
@@ -1117,7 +1076,7 @@ def _edge_coordinate_bounds(grid: Any, coordinate: str) -> np.ndarray:
                 np.where(
                     first_cell >= 0,
                     grid.lat[np.maximum(first_cell, 0)],
-                    grid.edge_lat,
+                    grid.edge_lat[section],
                 )
             ),
             90.0,

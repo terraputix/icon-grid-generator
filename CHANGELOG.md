@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-08-12
+
+- Route every grid family through one validated, chunked, atomic
+  `generate_grid_to_netcdf()` pipeline while preserving `IconGrid.to_netcdf()`
+  for already-materialized grids.
+- Generate limited-area files from the same compact, resumable global parent
+  stages used by large global exports, selecting regions in bounded chunks and
+  avoiding a complete parent `IconGrid`.
+- Compute non-global NetCDF-only coordinate bounds, connectivity conversions,
+  metrics, Cartesian fields, and compatibility fields by entity chunk.
+- Replace planar cell/edge Python object graphs with deterministic preallocated
+  and array-based builders while preserving established topology ordering.
+- Publish in-memory-grid NetCDF writes atomically and retain failed `.partial`
+  files for diagnosis.
+
 ## 0.7.0 - 2026-08-12
 
 - Make `generate_grid_to_netcdf()` the consistent file-oriented entry point for

@@ -17,11 +17,16 @@ deterministic pipeline:
 5. Build refinement/provenance fields.
 6. Assemble metadata, UUIDs, conversion helpers, and optional NetCDF output.
 
-Very large global grids use an export-first variant: generate the largest base
-stage with at most 1,310,720 cells (R2B7 for the standard R2 family), refine
-compact topology stage by stage, checkpoint each completed stage on disk, and
-construct NetCDF-only fields in bounded groups. This path returns the output
-`Path` rather than a complete `IconGrid`.
+File-oriented generation is coordinated by one pipeline for every grid family.
+It writes NetCDF-only transforms in entity chunks and returns the output `Path`
+rather than a complete `IconGrid`. Very large global grids generate the largest
+base stage with at most 1,310,720 cells (R2B7 for the standard R2 family), refine
+compact topology stage by stage, and checkpoint each completed stage on disk.
+Limited-area grids use that same compact engine for their construction parent
+and perform chunked regional selection before materializing the selected mesh.
+Planar grids have no recursive stages; preallocated geometry and array-based
+edge assembly avoid the Python object graphs that previously dominated their
+construction overhead.
 
 ## Compatibility Contracts
 
@@ -41,8 +46,9 @@ construct NetCDF-only fields in bounded groups. This path returns the output
 - The package exposes a Python API and does not provide workflow-specific command
   wrappers.
 - Global, planar, limited-area, optimization, diffusion, diagnostics, and
-  normal NetCDF export share the `IconGrid` data model. Export-first global
-  generation uses a compact private representation.
+  normal NetCDF export share the `IconGrid` data model. File-oriented generation
+  is coordinated in `_pipeline.py`; global grids and limited-area parents share
+  the compact private representation in `_streaming.py`.
 - `grid_generator.py` is the public facade; focused private modules contain the
   spherical, planar, regional, NetCDF, and streaming implementations.
 - Triangles are the only supported cell family.
@@ -101,8 +107,9 @@ construct NetCDF-only fields in bounded groups. This path returns the output
 - NetCDF export is an internal module boundary. Public users call
   `IconGrid.to_netcdf(path)` when they already have an in-memory grid, or
   `generate_grid_to_netcdf(...)` when the file is the desired result. The latter
-  dispatches every grid family and selects compact export-first generation for
-  large global grids.
+  adds generation dispatch; both calls share the canonical chunked atomic
+  writer. File-oriented generation selects compact export-first stages for
+  large global grids and limited-area construction parents.
 - For compatibility with established ICON grid files, spherical NetCDF
   `edgequad_area` values are normalized by `sphere_radius**2`. The exported
   variable is therefore dimensionless (`units = "1"`) and carries a
@@ -361,8 +368,8 @@ Large-grid generation uses:
    incidence, and the primal normals required by the next stage;
 6. immutable disk-backed checkpoint snapshots selected by an atomic manifest
    update, preserving the preceding stage if an overwrite is interrupted;
-7. export-first NetCDF construction that writes connectivity and derived fields
-   sequentially and releases each table before constructing the next; and
+7. export-first NetCDF construction that computes connectivity conversions and
+   derived fields in entity chunks for every grid family; and
 8. scale-relative orientation checks that remain valid when geometric
    determinants shrink at sub-kilometre resolution.
 
@@ -373,11 +380,13 @@ correct deterministic NumPy path, which is suitable for modest grids but not
 high-resolution global generation. Explicit `accelerator="numba"` fails if
 Numba is unavailable.
 
-The export-first path is global-only and requires Numba above its in-memory base
-stage. `generate_grid()` retains the NumPy path for in-memory work. By default,
-checkpoints live beside the output; large jobs require disk-backed output and
-checkpoint locations rather than a memory-backed temporary filesystem. Atomic
-replacement can temporarily retain both checkpoint snapshots or both the old
-and new NetCDF files, so provision more than the completed logical sizes. A
-successful work directory can be removed when no later resume or extension is
-needed.
+Compact multilevel stages require Numba above the in-memory base stage and are
+used for direct global output and limited-area construction parents.
+`generate_grid()` retains the NumPy path for in-memory work. Standalone planar
+grids use the shared chunked writer but need no bisection checkpoints. By
+default, checkpoints live beside the output; large jobs require disk-backed
+output and checkpoint locations rather than a memory-backed temporary
+filesystem. Atomic replacement can temporarily retain both checkpoint
+snapshots or both the old and new NetCDF files, so provision more than the
+completed logical sizes. A successful work directory can be removed when no
+later resume or extension is needed.

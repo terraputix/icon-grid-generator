@@ -45,9 +45,11 @@ from grid_generator import (
 )
 ```
 
-For global grids whose complete in-memory `IconGrid` would exceed available
-memory, the file-oriented path automatically uses compact export-first
-generation:
+Use the file-oriented path whenever the generated `IconGrid` is not itself
+needed. It validates every grid family through one entry point, computes
+NetCDF-only fields in chunks, and publishes the completed file atomically.
+Global grids whose complete `IconGrid` would exceed the base-stage budget use
+compact export-first generation:
 
 ```py
 from grid_generator import generate_grid_to_netcdf
@@ -63,24 +65,27 @@ generate_grid_to_netcdf(
 )
 ```
 
-For large global grids this path keeps compact staged topology, checkpoints
-completed bisection levels, and writes export-only fields in bounded chunks. New
-output is published atomically only after the NetCDF file closes successfully;
-an existing output remains in place until then. High-resolution streaming
-requires the `accelerate` extra. The optional-dependency-free NumPy fallback
-remains available through `generate_grid` for grids that fit in memory.
+For large global grids this path keeps compact staged topology and checkpoints
+completed bisection levels. Limited-area requests use the same mechanism for
+their global construction parent, then select cells in `chunk_size` batches and
+materialize only the regional result. This removes the complete global parent
+`IconGrid` from the regional peak. High-resolution global stages, including
+those used by a limited-area request, require the `accelerate` extra.
 
-Planar and limited-area specs are accepted by the same file-oriented function,
-but currently use their in-memory generation pipeline before writing.
-`chunk_size`, `work_dir`, and `resume` apply only when compact global generation
-is selected. Grid options may be supplied through `options`, or directly as
-keywords as above; direct keywords take precedence.
+Planar requests share the same chunked NetCDF writer and use array-based
+geometry/topology construction without per-entity Python containers. They have
+no recursive refinement stages, so `work_dir` and `resume` have no work to do.
+`chunk_size` applies to every family; `work_dir` and `resume` apply whenever a
+global or limited-area request needs multilevel compact stages. Grid options may
+be supplied through `options`, or directly as keywords as above; direct
+keywords take precedence.
 
 If `work_dir` is omitted, checkpoints are stored in a hidden directory beside
 the requested output file. For large grids, put the output or an explicit
 `work_dir` on disk-backed scratch storage rather than a memory-backed temporary
 filesystem. Set `resume=False` to ignore existing checkpoints. `chunk_size`
-limits export-only work arrays, but does not partition the compact core topology.
+limits regional-selection and export-only work arrays, but does not partition
+the compact core topology or the final regional/planar topology.
 Checkpoint manifests atomically select immutable array snapshots; an interrupted
 overwrite therefore leaves the preceding completed snapshot resumable.
 If writing fails, the requested output is not published; the `.partial` file is
@@ -107,7 +112,8 @@ in-memory workflow with sufficient memory.
 
 Both `grid.to_netcdf(..., fields=...)` and the file-oriented
 `generate_grid_to_netcdf(..., fields=...)` accept the same selector. The default
-is the complete schema.
+is the complete schema. They share the same canonical chunked, atomic writer;
+the difference is whether the caller already owns an in-memory `IconGrid`.
 
 | Profile | Fields | Consumer scope | Approximate R2B12 payload |
 | --- | ---: | --- | ---: |
