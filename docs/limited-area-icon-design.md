@@ -1,75 +1,106 @@
-# Valid Limited-Area and Open-Boundary ICON Grids
+# Generating Limited-Area ICON Grids
 
-Status: implemented for spherical limited-area generation and direct cuts.
+Use `LimitedAreaGridSpec` to generate an open spherical grid for a regional ICON
+domain. A specification combines:
 
-The implementation is informed by ICON-NWP's grid-reader and numerical-operator
-contracts. The defaults retain deterministic Python implementation, finite
-metrics, structural provenance, and valid ICON ordering. Bit-for-bit files and
-UUID reuse are not goals.
+- the global `R<n>B<k>` grid that determines the target resolution and
+  refinement topology;
+- optional generation settings that orient that global grid;
+- a geographic or rotated-pole region;
+- optional rules for selecting cells and treating the open boundary; and
+- an optional grid name.
 
-## Requirements and choices
+For an operational-resolution grid, prefer `generate_grid_to_netcdf()`. It can
+build a large global construction parent through resumable, disk-backed stages
+and materializes only the selected regional mesh. Use `generate_grid()` when
+you need the resulting `IconGrid` in memory for inspection or further Python
+processing.
 
-Some properties are required for a functional grid and are never compatibility
-options:
+## Quick start
 
-- reciprocal, manifold topology with exactly one real cell on each boundary
-  edge;
-- metrics recomputed for the retained and finally optimized geometry;
-- finite missing-side distances;
-- ICON boundary-control ordering and matching start/end tables for export; and
-- structural parent fields when the regional mesh is locally refined.
+This example creates a modest regional grid in memory and writes the complete
+ICON-style NetCDF schema:
 
-Other properties are scientific or numerical choices:
+```python
+from grid_generator import LimitedAreaGridSpec, Region, generate_grid
 
-| Choice | Default | Alternative |
-| --- | --- | --- |
-| Construction | select at B-1 and refine once | cut the complete final grid |
-| Cell inclusion | circumdisk intersection | center or center/vertex overlap |
-| Mask cleanup | remove one-neighbor ears | preserve the raw predicate result |
-| Boundary dual | clipped at the physical edge | mirrored ghost closure |
-| Entity ordering | ICON boundary prefixes | source order for in-memory analysis |
-| Local optimization | fixed-boundary spring, 2,000 iteration cap | explicit lower cap or zero iterations |
-
-Historical count reconciliation, opaque rectangle scaling, old UUID reuse,
-omission of useful metadata, and reproduction of non-finite values are not
-implemented.
-
-## Public policy objects
-
-The public policy signatures are:
-
-```text
-RegionSelectionOptions(
-    inclusion="circumradius",     # or "overlap" / "center"
-    cleanup="remove_ears",        # or "none"
-    buffer_rings=0,
+spec = LimitedAreaGridSpec(
+    parent="R2B4",
+    region=Region.lonlat_box(
+        lon_min=3.0,
+        lon_max=17.0,
+        lat_min=43.0,
+        lat_max=50.0,
+    ),
+    name="central_europe_R02B04",
 )
 
-OpenBoundaryOptions(
-    metric_closure="clipped",     # or "mirrored"
-    indexing_depth=14,
-    ordering="icon",              # or "source"
+grid = generate_grid(spec)
+print(grid.name, grid.dims)
+grid.to_netcdf("central_europe_R02B04.nc", fields="full")
+```
+
+`parent="R2B4"` describes the requested final resolution. With the default
+construction mode, the generator builds `R2B3`, selects and compacts the
+region, and performs the final bisection locally. You do not need to specify
+the construction parent yourself.
+
+For a larger grid that is needed only as a file, install the acceleration and
+NetCDF extras and use the file-oriented API:
+
+```bash
+python -m pip install "icon-grid-generator[accelerate,netcdf]"
+```
+
+```python
+from grid_generator import LimitedAreaGridSpec, Region, generate_grid_to_netcdf
+
+spec = LimitedAreaGridSpec(
+    parent="R2B10",
+    region=Region.lonlat_box(
+        lon_min=3.0,
+        lon_max=17.0,
+        lat_min=43.0,
+        lat_max=50.0,
+    ),
+    name="central_europe_R02B10",
+)
+
+generate_grid_to_netcdf(
+    spec,
+    "central_europe_R02B10.nc",
+    max_cells=None,
+    accelerator="numba",
+    work_dir="central_europe_R02B10-work",
+    fields="full",
 )
 ```
 
-`LimitedAreaGridSpec` accepts both objects, plus
-`construction="refine_last" | "cut_final"` and
-`local_optimization_iterations`. The old `boundary_depth` argument remains as
-an alias for selection buffer rings; it is deliberately not the ICON boundary
-indexing depth. Supplying both buffer spellings is rejected.
+Put both the output and `work_dir` on disk-backed storage. When staged global
+construction is needed, the work directory contains resumable checkpoints and
+can be removed after a successful export.
 
-`CutGridSpec` and the direct `cut_grid()` form accept the same selection and
-boundary policies. A source-ordered grid is useful for analysis, but strict
-NetCDF export rejects it because ICON's start/end ranges require grouped
-boundary prefixes.
+## Describing an operational domain
 
-## Rotated-pole regions
+Operational centers describe their regional domains in different coordinate
+systems. The API supports ordinary longitude/latitude extents, rotated-pole
+boxes, circles, oriented rectangles, and polygons. Coordinates are in degrees.
 
-`Region.rotated_lonlat_box(...)` defines the region in an explicit rotated-pole
-coordinate system. For the CH domains the parameters can be written as:
+The examples in this section demonstrate the corresponding construction
+patterns. They do not reproduce or certify a currently operational grid. To
+replace an existing MeteoSwiss, DWD, or other institutional grid, use that
+system's authoritative parent resolution, orientation, region definition, and
+boundary configuration.
 
-```text
-Region.rotated_lonlat_box(
+### Rotated-pole domains
+
+Use `Region.rotated_lonlat_box()` when a domain is defined in a rotated-pole
+coordinate system, as in a MeteoSwiss ICON-CH-style setup:
+
+```python
+from grid_generator import LimitedAreaGridSpec, Region
+
+ch_region = Region.rotated_lonlat_box(
     pole_lon=-170.0,
     pole_lat=43.0,
     center_lon=-1.01,
@@ -77,171 +108,312 @@ Region.rotated_lonlat_box(
     half_width_lon=5.93,
     half_width_lat=4.01,
 )
+
+ch_spec = LimitedAreaGridSpec(
+    parent="R2B8",
+    region=ch_region,
+    name="ch_domain_R02B08",
+)
 ```
 
-This transform is independent of the icosahedral-pole options used to orient
-the global parent and is not CH-specific.
+`center_lon`, `center_lat`, `half_width_lon`, and `half_width_lat` are expressed
+in the rotated coordinate system. `pole_lon` and `pole_lat` define that system
+in geographic coordinates. These values are independent of
+`north_pole_lon`, `north_pole_lat`, and `rotation_angle_degrees`, which orient
+the icosahedral global parent.
 
-## Native refine-last pipeline
+### Geographic and polygon domains
 
-For a requested `R<n>B<k>` grid with `k > 0`, the default path:
+Use `Region.lonlat_box()` when a domain is given as a geographic extent, for
+example in a DWD-style regional workflow. Replace the illustrative bounds with
+the authoritative domain definition:
 
-1. generates the global `R<n>B<k-1>` parent with the requested global options;
-2. evaluates the region using cell circumcenters and circumradii;
-3. applies deterministic cleanup and optional neighbor-ring buffering;
-4. compacts the selected parent with typed NumPy index arrays;
-5. bisects the open parent once;
-6. spring-relaxes only the local child while keeping boundary vertices fixed;
-7. rejects the optimized vertices if they are non-finite or invert a cell;
-8. builds open-boundary controls and applies stable ICON permutations;
-9. recomputes coordinates, connectivity, metrics, and index tables; and
-10. records the requested resolution, actual construction parent, and resolved
-    policies in metadata and grid identity.
+```python
+from grid_generator import LimitedAreaGridSpec, Region
 
-At bisection level zero the implementation falls back to direct cutting
-because no preceding bisection level exists. `construction="cut_final"` is
-also available when an exact subset of an existing final-resolution parent is
-the desired scientific object.
+dwd_region = Region.lonlat_box(
+    lon_min=-10.0,
+    lon_max=30.0,
+    lat_min=40.0,
+    lat_max=60.0,
+)
 
-The local refinement records:
+dwd_spec = LimitedAreaGridSpec(
+    parent="R2B8",
+    region=dwd_region,
+    name="de_domain_R02B08",
+)
+```
 
-- four one-based `parent_cell_index` entries per compact coarse parent;
-- ICON child-cell type codes;
-- one-based parent edge indices and edge child types; and
-- positive parent-vertex or negative parent-edge values in
-  `parent_vertex_index`.
+For an irregular footprint, pass its geographic vertices to
+`Region.polygon()`:
 
-The negative midpoint encoding is intentional ICON provenance, not a missing
-index.
+```python
+region = Region.polygon(
+    (
+        (-10.0, 42.0),
+        (22.0, 42.0),
+        (30.0, 55.0),
+        (5.0, 61.0),
+        (-10.0, 52.0),
+    )
+)
+```
 
-## Region selection
+The available region constructors are:
 
-`inclusion="circumradius"` is the default. For circles and longitude/latitude
-boxes it applies a cell-circumcenter test expanded by the cell circumradius.
-The same rule, followed by default ear cleanup, gives stable entity sets across
-the tested R2B2-R2B5 circular, unrotated-box, and rotated-pole-box grids.
-`inclusion="overlap"` retains a cell when its center or
-any vertex is inside the region; `inclusion="center"` preserves the narrower
-center-defined interpretation. Package-specific polygons use overlap semantics
-because they do not have a directly corresponding circumdisk predicate.
+| Region | Use when the domain is defined by |
+| --- | --- |
+| `Region.lonlat_box(...)` | geographic longitude/latitude bounds |
+| `Region.rotated_lonlat_box(...)` | bounds in a rotated-pole coordinate system |
+| `Region.circle(...)` | a center and angular radius |
+| `Region.rectangle(...)` | a locally oriented geographic rectangle |
+| `Region.polygon(...)` | an irregular geographic footprint |
 
-The default cleanup removes raw cells with at most one selected edge neighbor.
-This prevents isolated one-cell protrusions and stabilizes domain boundaries.
-`cleanup="none"`
-preserves the exact predicate result.
+For `Region.lonlat_box()`, `lon_min > lon_max` intentionally selects a box that
+crosses the antimeridian.
 
-Selection and expansion use boolean masks and typed arrays rather than Python
-sets, so their memory cost remains linear for large parents.
+## Choosing the grid settings
 
-## Boundary metrics
+The defaults are intended to produce an ICON-ordered regional grid with a
+clean, covered boundary. Most users need to choose only `parent`, `region`, and
+`name`.
 
-For a spherical boundary edge under `metric_closure="clipped"`:
+### Parent grid and construction mode
 
-- the real side stores its center-to-edge-center distance;
-- the missing side stores exactly zero;
-- the dual edge ends at the physical boundary edge center; and
-- `edgequad_area` and dual-area contributions use that clipped dual.
+`parent` is a global grid name such as `"R2B8"` or a `GlobalGridSpec`. It
+controls the final regional resolution and refinement topology. Pass
+`north_pole_lon`, `north_pole_lat`, and `rotation_angle_degrees` to the
+generation call when the global parent needs a non-default orientation.
 
-The implementation evaluates the established spherical metric kernels with a
-temporary edge-center ghost, then removes the exterior distance. This keeps
-normal and orientation conventions identical to the closed-grid kernels while
-producing finite open-grid values.
+The default `construction="refine_last"` is recommended for a new regional
+grid. It selects cells at bisection level `B-1`, compacts the result, and
+refines it once locally. This preserves immediate-parent refinement information
+without constructing the four-times-larger final global grid.
 
-`metric_closure="mirrored"` reflects the real half of the dual across the
-boundary. It doubles boundary dual length and fills the exterior side distance
-with the real-side distance. This is a useful ghost-cell convention and the
-former open-planar package behavior, but it is not the physical default for
-regional grids.
+Use `construction="cut_final"` only when the regional grid must be an exact
+cell subset of the final-resolution global parent:
 
-Direct planar cuts apply the same explicit choice. Standalone planar grid specs
-retain their established metric convention because their public API does not
-yet carry an open-boundary policy.
+```python
+spec = LimitedAreaGridSpec(
+    parent="R2B8",
+    region=region,
+    construction="cut_final",
+    name="exact_R02B08_cut",
+)
+```
 
-Geometry transforms rebuild spherical open metrics with the recorded closure,
-so optimization and diffusion cannot silently revert a clipped grid to a
-mirrored one.
+`cut_final` needs the final-resolution global construction parent and therefore
+uses substantially more time, memory, and checkpoint storage. At bisection
+level zero it is selected automatically because no preceding level exists.
 
-## ICON boundary indexing
+### Cell selection and buffer rings
 
-The boundary indexer follows the established ICON grid convention:
+The default selection policy is equivalent to:
 
-1. vertices on one-cell edges receive level one;
-2. vertex levels propagate inward through incident cells up to the configured
-   depth;
-3. cells receive the minimum positive vertex level, or zero;
-4. edge controls are formed from adjacent cell controls, with the controlled
-   to uncontrolled transition mapped to zero;
-5. cells at levels 1 through 5, edges at 1 through 10, and vertices at 1
-   through 5 are stably moved to prefixes; and
-6. fixed-width `start_idx_*` and `end_idx_*` tables describe those prefixes and
-   the unordered interior.
+```python
+from grid_generator import RegionSelectionOptions
 
-Depth 14 is the default. It supports ICON's usual nudging-width assumptions and
-is independent of selection buffer rings.
+selection = RegionSelectionOptions(
+    inclusion="circumradius",
+    cleanup="remove_ears",
+    buffer_rings=0,
+)
+```
 
-## NetCDF boundary contract
+Choose an inclusion rule according to the domain contract:
 
-Internal connectivity remains zero-based with `-1` missing. Regional NetCDF
-connectivity uses one-based real indices and `-1` missing consistently for
-neighbors, adjacent cells, and vertex incidence. Global and periodic output is
-unchanged.
+| `inclusion` | Result |
+| --- | --- |
+| `"circumradius"` | Includes cells whose circumdisks intersect supported boxes or circles; recommended for boundary coverage. |
+| `"overlap"` | Includes cells whose center or at least one vertex is inside the region. |
+| `"center"` | Includes only cells whose centers are inside the region; produces the narrowest selection. |
 
-Before writing a regional grid, the writer verifies:
+Polygons always use center-or-vertex overlap because they have no corresponding
+circumdisk predicate. `cleanup="remove_ears"` removes one-cell protrusions from
+the selected mask. Use `cleanup="none"` only when the raw predicate result is
+part of the required domain definition.
 
-- at least one open boundary edge exists;
-- ICON ordering was selected and the boundary prefixes are contiguous;
-- required area, length, and distance metrics are finite and physical; and
-- hierarchy fields have the correct entity dimensions.
+`buffer_rings` adds complete cell-neighbor rings after selection and cleanup.
+This is useful when the supplied region describes the interior area of interest
+and the grid must also include a halo for relaxation, interpolation, or boundary
+forcing:
 
-Metadata includes `grid_root`, `grid_level`, `boundary_depth_index`, the full
-construction-parent name and UUID, center/subcenter fields,
-`number_of_grid_used`, and all resolved policies. `uuidOfParHGrid` identifies
-the compact immediate parent against which the structural indices are defined;
-`construction_parent_uuid` retains the full global source identity.
+```python
+spec = LimitedAreaGridSpec(
+    parent="R2B8",
+    region=region,
+    selection=RegionSelectionOptions(buffer_rings=2),
+)
+```
 
-Spherical limited-area and spherical cut files retain ICON
-`grid_geometry = 1`. ICON defines geometry value `3` as a planar channel, not
-as a generic limited-area grid. A separate `open_boundary = 1` attribute drives
-the package's regional validation and missing-neighbor encoding without causing
-ICON to disable spherical behavior. This distinction also lets the
-Cartesian-free `"icon"` field profile select ICON's spherical reconstruction
-path.
+Do not confuse selection buffer rings with ICON boundary indexing depth. The
+older `boundary_depth` argument is retained only as an alias for
+`selection.buffer_rings`; new code should use `buffer_rings`.
 
-## Scaling and remaining work
+### Open-boundary policy
 
-The default avoids constructing the four-times-larger final-resolution global
-grid. Compaction, incidence construction, bisection, and metric calculation use
-typed arrays and the existing accelerated kernels where available.
+The default boundary policy is:
 
-Limited-area specs can be passed to either `generate_grid()` or the file-oriented
-`generate_grid_to_netcdf()` API. The in-memory call deliberately returns a full
-`IconGrid` and therefore retains its generated construction parent during
-extraction. The file-oriented call instead uses the compact global engine,
-including resumable bisection checkpoints above the base-stage budget, and
-evaluates region predicates in bounded cell chunks. It materializes only the
-selected regional mesh for boundary ordering, regional metrics, and export.
-High-resolution parents require `max_cells=None`, the `accelerate` extra, and
-disk-backed output/checkpoint storage.
+```python
+from grid_generator import OpenBoundaryOptions
 
-Standalone non-periodic planar specs also remain on their existing mirrored
-metric and zero-control conventions. Applying the shared policy/indexing layer
-to those specs requires a deliberate public-API migration rather than silently
-changing their numerical boundary definition.
+boundary = OpenBoundaryOptions(
+    metric_closure="clipped",
+    indexing_depth=14,
+    ordering="icon",
+)
+```
 
-## Validation evidence
+Keep `ordering="icon"` for NetCDF export. It groups boundary-control levels and
+creates matching ICON start/end tables. `ordering="source"` preserves the
+parent entity order for in-memory analysis, but the strict regional writer
+rejects it.
 
-Maintained tests cover:
+`indexing_depth=14` supports the usual ICON boundary and nudging-zone layout.
+Change it only when the consuming model configuration requires a different
+depth. It does not add cells to the selected domain.
 
-- rotated-pole selection and overlap versus center inclusion;
-- four-child structural provenance and midpoint encoding;
-- boundary controls, permutations, and start/end tables;
-- clipped versus mirrored lengths and distances;
-- finite metric and topology invariants after generation and transforms;
-- `-1` missing-index NetCDF encoding;
-- ICON geometry-enum behavior for spherical regional and planar grids; and
-- unchanged global and periodic contracts.
+`metric_closure="clipped"` terminates each dual edge at the physical boundary
+and is the normal finite-volume choice. `"mirrored"` reflects the interior half
+of the dual across the boundary for consumers that explicitly require a
+ghost-cell convention.
 
-Large operational domains remain manual acceptance cases and are not repository
-fixtures. A newly generated horizontal-grid UUID requires matching EXTPAR,
-vertical-grid, initial-condition, and lateral-boundary products before an
-operational ICON run.
+### Local optimization
+
+With `construction="refine_last"`, the compact child grid is spring-relaxed
+with boundary vertices fixed. The default cap is 2,000 iterations. Set
+`local_optimization_iterations=0` when unrelaxed local refinement geometry is
+required, or set a smaller positive cap for exploratory and lower-cost runs.
+
+This setting is separate from `spring_iterations`, which controls optimization
+of the generated global construction parent.
+
+## Producing and checking the result
+
+Use `fields="full"` for general exchange unless the downstream reader's exact
+field requirements are known. The `"icon"`, `"icon4py"`, and `"reduced"`
+profiles produce smaller files for their documented consumer scopes; see
+[NetCDF field profiles](api.md#netcdf-field-profiles).
+
+The writer checks that the result has an open boundary, ICON-contiguous
+boundary prefixes, finite physical metrics, and correctly shaped hierarchy
+fields before publishing the file. A spherical regional file uses
+`grid_geometry = 1` and carries the independent `open_boundary = 1` attribute.
+Missing neighbors are encoded as `-1` in exported connectivity.
+
+For an in-memory result, basic inspection can include:
+
+```python
+import numpy as np
+
+grid = generate_grid(spec)
+boundary_edges = np.any(grid.edge_cells < 0, axis=1)
+
+print(grid.dims)
+print("boundary edges:", np.count_nonzero(boundary_edges))
+print("grid UUID:", grid.metadata["uuidOfHGrid"])
+print("construction parent:", grid.metadata["construction_parent_grid_name"])
+```
+
+Generation creates a new horizontal-grid UUID. It does not recreate a
+historical operational file bit for bit or reuse that file's UUID. Before a new
+grid can drive an operational ICON run, generate matching EXTPAR, vertical-grid,
+initial-condition, and lateral-boundary products and validate the complete
+model configuration.
+
+## Large-grid workflow
+
+Operational resolutions can have very large global construction parents even
+when the selected regional result is much smaller. For these cases:
+
+1. use `generate_grid_to_netcdf()` rather than creating an in-memory
+   `IconGrid`;
+2. install the `accelerate` extra and select `accelerator="numba"`;
+3. set `max_cells=None` only after confirming the intended resolution;
+4. place the output and `work_dir` on disk-backed storage with enough space for
+   checkpoints and atomic replacement files; and
+5. leave `resume=True` to reuse completed construction stages after an
+   interruption.
+
+`chunk_size` bounds regional predicate evaluation and NetCDF-only work arrays.
+It does not partition the compact core topology or the final selected regional
+mesh. Use distinct output and work-directory paths for concurrent jobs.
+
+See [Resource Expectations](api.md#resource-expectations) for global parent
+sizes and [Performance and Scaling](design.md#performance-and-scaling) for
+measured requirements.
+
+## Implementation details
+
+The preceding sections are sufficient for normal grid generation. The details
+below explain the boundary and provenance fields that advanced users may need
+when integrating a generated grid with ICON tooling.
+
+### Refine-last pipeline and provenance
+
+For a requested `R<n>B<k>` grid with `k > 0`, the default pipeline:
+
+1. generates the global `R<n>B<k-1>` construction parent;
+2. evaluates the region, cleans the mask, and adds requested buffer rings;
+3. compacts the selected parent cells into an open mesh;
+4. bisects that compact parent once;
+5. locally optimizes the child while holding boundary vertices fixed;
+6. creates boundary-control fields and applies stable ICON permutations; and
+7. recomputes connectivity, coordinates, metrics, index tables, metadata, and
+   grid identity.
+
+The locally refined result records four one-based `parent_cell_index` entries
+per compact coarse parent, ICON child-cell type codes, one-based parent-edge
+indices and child types, and parent-vertex provenance. In
+`parent_vertex_index`, a positive value refers to a parent vertex and a
+negative value refers to a parent edge whose midpoint created the child vertex;
+the negative values are provenance, not missing indices.
+
+`uuidOfParHGrid` identifies the compact immediate parent against which these
+structural indices are defined. `construction_parent_uuid` retains the UUID of
+the full global source grid.
+
+### Boundary indexing
+
+The boundary indexer starts with vertices on edges that have one real adjacent
+cell, then propagates levels inward through incident cells up to
+`indexing_depth`. Cell and edge controls are derived from those vertex levels.
+Stable permutations move the active control levels to entity prefixes, and
+fixed-width `start_idx_*` and `end_idx_*` tables describe those prefixes and
+the unordered interior.
+
+Internal connectivity is zero-based and uses `-1` for a missing neighbor.
+Regional NetCDF connectivity uses one-based real indices and retains `-1` for
+missing neighbors, adjacent cells, and vertex incidence.
+
+### Boundary metrics
+
+With `metric_closure="clipped"`, the real side of a boundary edge stores its
+cell-center-to-edge-center distance, the missing side stores zero, and the dual
+edge ends at the physical boundary. `edgequad_area` and dual-area contributions
+use that clipped dual.
+
+With `metric_closure="mirrored"`, the generator reflects the real half of the
+dual across the boundary. The boundary dual length is doubled and the exterior
+side distance equals the real-side distance. Geometry transforms rebuild open
+metrics using the policy recorded on the grid.
+
+### Metadata and NetCDF contract
+
+Regional metadata records the requested `grid_root` and `grid_level`, the
+construction-parent name and UUID, the boundary indexing depth, resolved
+selection and boundary policies, center/subcenter fields, and
+`number_of_grid_used`.
+
+Spherical limited-area and spherical cut files remain ICON geometry type `1`.
+Geometry type `3` denotes a planar channel, not a generic limited-area grid.
+The separate `open_boundary = 1` attribute activates regional validation and
+missing-neighbor encoding without disabling spherical behavior.
+
+The implementation maintains reciprocal manifold topology, requires exactly
+one real cell on each open boundary edge, recomputes metrics after final
+geometry changes, and discards a local-optimization update if it is non-finite
+or inverts a cell. Tests cover region-selection policies, refinement
+provenance, boundary controls and permutations, clipped and mirrored metrics,
+open NetCDF connectivity, and unchanged global and periodic contracts.
