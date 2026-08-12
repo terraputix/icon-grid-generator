@@ -582,7 +582,8 @@ print(dataset[["cell_area", "edge_length", "parent_cell_index"]])
 ```
 
 Install the optional xarray dependency with
-`python -m pip install "icon-grid-generator[xarray]"`.
+`python -m pip install "icon-grid-generator[xarray]"`, or add it to an existing
+uv project with `uv add "icon-grid-generator[xarray]"`.
 
 `to_dict()` returns references to the grid's existing NumPy arrays and nested
 dictionaries; it is not a deep copy. Although `IconGrid` and its option/spec

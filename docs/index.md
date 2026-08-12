@@ -22,7 +22,17 @@ grids without depending on ICON model runtimes or stencil frameworks.
 
 ## Basic Usage
 
-Install `icon-grid-generator[netcdf]` before running this NetCDF example.
+Install `icon-grid-generator[netcdf]` before running this NetCDF example:
+
+```bash
+python -m pip install "icon-grid-generator[netcdf]"
+```
+
+With [uv](https://docs.astral.sh/uv/), add it to an existing project instead:
+
+```bash
+uv add "icon-grid-generator[netcdf]"
+```
 
 ```python
 from grid_generator import generate_grid
@@ -40,6 +50,12 @@ For high-resolution global grids, install the optional Numba acceleration path:
 
 ```bash
 python -m pip install "icon-grid-generator[accelerate,netcdf]"
+```
+
+Or with uv:
+
+```bash
+uv add "icon-grid-generator[accelerate,netcdf]"
 ```
 
 Without `accelerate`, `generate_grid()` with `accelerator="auto"` uses the

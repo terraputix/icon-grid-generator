@@ -44,6 +44,12 @@ NetCDF export requires installing the optional extra:
 python -m pip install "icon-grid-generator[netcdf]"
 ```
 
+Or add it to an existing uv project:
+
+```bash
+uv add "icon-grid-generator[netcdf]"
+```
+
 ```python
 from pathlib import Path
 

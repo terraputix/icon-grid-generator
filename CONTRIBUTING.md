@@ -55,6 +55,14 @@ python -m pip install -e ".[accelerate,test,docs,netcdf,xarray]"
 python -m pip install build twine
 ```
 
+The equivalent uv setup is:
+
+```bash
+uv venv
+uv pip install -e ".[accelerate,test,docs,netcdf,xarray]"
+uv pip install build twine
+```
+
 Numba remains optional for package users, but installing the full development
 set lets contributors exercise every supported path.
 

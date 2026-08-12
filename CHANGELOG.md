@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-08-12
+
+- Document installation with uv for package users and contributors.
+
 ## 0.8.0 - 2026-08-12
 
 - Route every grid family through one validated, chunked, atomic

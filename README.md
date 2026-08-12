@@ -25,11 +25,30 @@ The base package requires Python 3.10 or newer and NumPy:
 python -m pip install icon-grid-generator
 ```
 
+With [uv](https://docs.astral.sh/uv/), add the package to an existing project:
+
+```bash
+uv add icon-grid-generator
+```
+
+For a standalone uv-managed virtual environment, use:
+
+```bash
+uv venv
+uv pip install icon-grid-generator
+```
+
 The NetCDF calls in the quick start require the `netcdf` extra. Install
 acceleration and common output integrations for high-resolution work with:
 
 ```bash
 python -m pip install "icon-grid-generator[accelerate,netcdf,xarray]"
+```
+
+The equivalent uv command for an existing project is:
+
+```bash
+uv add "icon-grid-generator[accelerate,netcdf,xarray]"
 ```
 
 Numba acceleration is optional for in-memory grids and required for the
