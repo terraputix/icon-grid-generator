@@ -52,7 +52,7 @@ NetCDF extras and use the file-oriented API:
 python -m pip install "icon-grid-generator[accelerate,netcdf]"
 ```
 
-```python
+```py
 from grid_generator import LimitedAreaGridSpec, Region, generate_grid_to_netcdf
 
 spec = LimitedAreaGridSpec(
