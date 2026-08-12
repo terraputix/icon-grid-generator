@@ -204,6 +204,39 @@ def test_streamed_global_netcdf_matches_in_memory_export(monkeypatch, tmp_path):
     assert not (tmp_path / "streamed.nc.partial").exists()
 
 
+def test_small_global_file_export_keeps_numpy_only_contract(
+    monkeypatch,
+    tmp_path,
+):
+    pytest.importorskip("netCDF4")
+
+    def fail_numba(*_args, **_kwargs):
+        raise AssertionError("small auto-accelerator export attempted a Numba kernel")
+
+    monkeypatch.setattr(_streaming._accelerated, "cell_areas_numba", fail_numba)
+    monkeypatch.setattr(
+        _streaming._accelerated,
+        "spherical_edge_metrics_numba",
+        fail_numba,
+    )
+    monkeypatch.setattr(
+        _streaming._accelerated,
+        "dual_areas_from_edges_numba",
+        fail_numba,
+    )
+    reference = generate_grid("R01B00", accelerator="auto").to_netcdf(
+        tmp_path / "reference.nc"
+    )
+    actual = generate_grid_to_netcdf(
+        "R01B00",
+        tmp_path / "actual.nc",
+        accelerator="auto",
+        chunk_size=7,
+    )
+
+    assert_netcdf_variables_equal(reference, actual)
+
+
 @pytest.mark.parametrize(
     "spec",
     [

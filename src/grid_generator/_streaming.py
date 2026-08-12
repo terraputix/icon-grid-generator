@@ -243,6 +243,17 @@ def generate_global_grid_to_netcdf(
         or chunk_size <= 0
     ):
         raise ValueError("chunk_size must be a positive integer")
+    if spec.expected_cells <= DEFAULT_IN_MEMORY_BASE_CELLS:
+        from . import _netcdf
+        from . import grid_generator as gg
+
+        grid = gg._generate_resolved_grid(spec, options)
+        return _netcdf.write_icon_grid(
+            grid,
+            output_path,
+            fields=selected_fields,
+            chunk_size=chunk_size,
+        )
     compact = compact_global_grid_for_export(
         spec,
         options,
